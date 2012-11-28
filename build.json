@@ -2,7 +2,7 @@
 // Use "/" for file paths.  If not, "\" must be escaped (NOTE: will work in Windows either way);
 // TODO: when documenting use - be sure to indicate that any array properties are completely overrwritten when specified in additional build files.
 {
-	"build": "prod"                           // "prod" build type - only valid values are "prod" and "dev"
+	"buildType": "prod"                           // "prod" build type - only valid values are "prod" and "dev"
 ,	"root": ""                                // default's to working directory
 ,	"importroot": "."                         // relative to root
 // NOTE: "subs" not yet implemented
