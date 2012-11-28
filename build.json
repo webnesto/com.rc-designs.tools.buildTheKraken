@@ -16,12 +16,12 @@
 	}
 ,	"doDeletes": "true"                       // when true, target folders contents will be stripped of file type before build insertion (clears out dead wood) - TODO: allow on a type by type basis.
 ,	"keepScratch": "false"                    // when true, prevents removal of scratch directory upon completion ( note: if not deleting, and scratch in source dir - scratch should be added to ignores lists )
-,	"types": [ "js","css","html" ]            // types of files to be grouped / built.
+,	"types": [ "Javascript","CSS","HTML" ]            // types of files to be grouped / built.
 ,	"ignores": [                              // global folders ignored ( ignored for all file types )
 		"tmp"                                 // ignoring scratch dir, by default.
 	]
 ,	"typeProps": {
-		"js": {
+		"Javascript": {
 			"extension": "js"
 //		,	"extension_out": "jcrazy"         // Optional - different extension for generated file(s)
 //		,	"extension_out_dev": "jcrazier"   // Optional - different extension for use in "dev_include" paths ( and imports)
@@ -51,7 +51,7 @@
 			]
 		,	"do_source_commands": "prod"       // possible values are "dev", "prod", "both", "none"
 		}
-	, "css": {
+	, "CSS": {
 			"extension": "css"
 		,	"block_comment": "/*! -CONTENT- */"
 		,	"dev_include": "@import \"-CONTENT-\";"
@@ -66,7 +66,7 @@
 				"java  -jar \"{scriptsPath}/ext/yuicompressor-2.4.2.jar\" {infile} -o {outfile}  --line-break 1000 " //-v"
 			]
 		}
-	,	"less": {
+	,	"LESS CSS": {
 			"extension": "less"
 		,	"extension_out": "css"
 		,	"block_comment": "/* -CONTENT- */"
@@ -83,7 +83,7 @@
 			,	"java -jar \"{scriptsPath}/ext/yuicompressor-2.4.2.jar\" {infile} -o {outfile}  --line-break 1000 " //-v"
 			]
 		}
-	, "html": {
+	, "HTML": {
 			"extension": "html"
 		,	"block_comment": "<!-- -CONTENT- -->"
 		,	"dev_include": "<!--#include virtual=\"-CONTENT-\" -->"

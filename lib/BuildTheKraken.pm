@@ -136,27 +136,27 @@ sub getFilenamesByType {
 #   $config: A configuration hash reference.
 #
 # Returns:
-#   $filesByExtAndDir: A hashref keying the type's extension to a hashref whose keys are
+#   $filesByTypeAndDir: A hashref keying the type's name to a hashref whose keys are
 #                       directories relative to the $config->{workDir} and values are an array of 
-#                       absolute paths to files in that directory with the required extension.
+#                       absolute paths to files in that directory with the type's extension.
 #   $filesForSourceCommands: A hashref with file-extension keys whose values are a reference 
 #                            to an array containing the paths to the same files returned in
 #                            the returned data, but with the path relative to the $targetedSrcDir.
 
 	my ( $config ) = @_;
 
-	my $filesByExtAndDir = {};
+	my $filesByTypeAndDir = {};
         my $filesForSourceCommands = {};
 
-	for my $filetype ( @{ $config->{ types } } ){
-		my $typeProps = $config->{ typeProps }->{ $filetype } or croak "No properties for filetype: $filetype";
-		my $ext = $typeProps->{ extension } or croak "No extension for filetype: $filetype";
+	for my $type ( @{ $config->{ types } } ){
+		my $typeProps = $config->{ typeProps }->{ $type } or croak "No properties for filetype: $type";
+		my $ext = $typeProps->{ extension } or croak "No extension for filetype: $type";
 		my @ignores = ( @{ $config->{ ignores } }, @{ $typeProps->{ ignores } } );
 
 		$filesForSourceCommands->{ $ext } = [];
 
 		printLog( 'processing $ext' );
-                defined $filesByExtAndDir->{ $ext } or $filesByExtAndDir->{ $ext } = {};
+                defined $filesByTypeAndDir->{ $type } or $filesByTypeAndDir->{ $type } = {};
 
                 # If $typeProps->{folder} is defined, look in that subdirectory of the $config->{workDir}.
                 # Otherwise, look in the $config->{workDir}.
@@ -173,15 +173,15 @@ sub getFilenamesByType {
 				printLog( "\t+ folder: $dir" );
 
                                 # Make sure there is an array allocated for the extension and directory.
-                                unless( defined $filesByExtAndDir->{ $ext }->{ $dir } ) {
-                                    $filesByExtAndDir->{ $ext }->{ $dir } = ();
+                                unless( defined $filesByTypeAndDir->{ $type }->{ $dir } ) {
+                                    $filesByTypeAndDir->{ $type }->{ $dir } = ();
 				}
 
 				find(
 					sub {
 						my $absFile = $File::Find::name;
 						if ( $absFile =~ /\.($ext)$/) {
-							push( @{ $filesByExtAndDir->{ $ext }->{ $dir } }, $absFile );
+							push( @{ $filesByTypeAndDir->{ $type }->{ $dir } }, $absFile );
 							my $relFile = File::Spec->abs2rel( $absFile, $targetedSrcDir );
 							push( @{ $filesForSourceCommands->{ $ext } }, $relFile );
 							printLog( "\t\tfile: $_" );
@@ -190,11 +190,11 @@ sub getFilenamesByType {
 				, 	File::Spec->catdir( $targetedSrcDir, $dir )
 				);
 
-				if( ! defined $filesByExtAndDir->{ $ext }->{ $dir } ) {
+				if( ! defined $filesByTypeAndDir->{ $type }->{ $dir } ) {
 					# Remove keys for extension-directory combinations with no files.
-					delete $filesByExtAndDir->{ $ext }->{ $dir };
+					delete $filesByTypeAndDir->{ $type }->{ $dir };
 				} else {
-					my $numFiles = @{ $filesByExtAndDir->{ $ext }->{ $dir } };
+					my $numFiles = @{ $filesByTypeAndDir->{ $type }->{ $dir } };
 					printLog( "\t\tTOTAL:$ext:$dir: $numFiles" );
 				}
 
@@ -206,7 +206,7 @@ sub getFilenamesByType {
 
 	chdir $config->{workDir}; # Return to whence we came.
 
-	return $filesByExtAndDir, $filesForSourceCommands;
+	return $filesByTypeAndDir, $filesForSourceCommands;
 }
 
 sub parseProdContent {
@@ -462,11 +462,11 @@ sub getBuildSorter {
 sub makeFiles {
 # Expects:
 #   $config: The configuration hash reference.
-#   $filesByExtAndDir: A hashref keying the type's extension to a hashref whose keys are
+#   $filesByTypeAndDir: A hashref keying the type's extension to a hashref whose keys are
 #                       directories relative to the $workDir and values are an array of 
 #                       absolute paths to files in that directory with the required extension.
 
-	my ( $config, $filesByExtAndDir ) = @_;
+	my ( $config, $filesByTypeAndDir ) = @_;
 
 	my $scratch = $config->{ folders }->{ scratch };
 	my $folders_build = $config->{ folders }->{ build };
@@ -495,7 +495,7 @@ sub makeFiles {
 
 #HERE
 
-	foreach $type( keys %{ $filesByExtAndDir } ){
+	foreach $type ( keys %{ $filesByTypeAndDir } ) {
 		$typeProps = $config->{ typeProps }->{ $type };
 		$ext = $typeProps->{ extension };
 		$ext_out = $typeProps->{ extension_out } ? $typeProps->{ extension_out } : $ext;
@@ -506,7 +506,7 @@ sub makeFiles {
  		$includeString = $typeProps->{dev_include};
 		$outputPath = File::Spec->catdir( $config->{root}, $ext_build, $folders_build );
 
-		foreach $fileName ( keys %{ $filesByExtAndDir->{ $type } } ){
+		foreach $fileName ( keys %{ $filesByTypeAndDir->{ $type } } ){
 			$file = File::Spec->catfile( $scratch, "$fileName.$ext_out" );
 
 			printLog( "making file: $file" );
@@ -518,7 +518,7 @@ sub makeFiles {
 
 			$buildSort = getBuildSorter( $typeProps->{ firsts }, $typeProps->{ lasts } );
 
-			@fromFiles = sort $buildSort @{ $filesByExtAndDir->{ $type }->{ $fileName } };
+			@fromFiles = sort $buildSort @{ $filesByTypeAndDir->{ $type }->{ $fileName } };
 			foreach $fromFile ( @fromFiles ){
 				$fromFile = Cwd::realpath( $fromFile );
 				printLog( "\tadding $fromFile" );
@@ -557,7 +557,7 @@ sub makeFiles {
 }
 
 sub moveToTarget {
-	my ( $config, $filesByExtAndDir, $workDir ) = @_;
+	my ( $config, $filesByTypeAndDir, $workDir ) = @_;
 	my $scratch = $config->{ folders }->{ scratch };
 	my $bin = $config->{ folders }->{ build };
 	my $build = $config->{ buildType };
@@ -589,7 +589,7 @@ sub moveToTarget {
 	$minPath = File::Spec->catdir( $scratch, $MIN );
 	-e $minPath or mkdir $minPath or printLog( "Cannot make minPath: $minPath: $!" );
 
-	foreach $type( keys %{ $filesByExtAndDir } ){
+	foreach $type( keys %{ $filesByTypeAndDir } ){
 		$typeProps = $config->{ typeProps }->{ $type };
 		$ext = $typeProps->{ extension };
 		$ext_out = $typeProps->{ extension_out } ? $typeProps->{ extension_out } : $ext;
@@ -616,7 +616,7 @@ sub moveToTarget {
 			emptyDirOfType( $buildFolder, $ext_out );
 		}
 
-		foreach $fileName ( keys %{ $filesByExtAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
+		foreach $fileName ( keys %{ $filesByTypeAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
 
 			$file = File::Spec->catfile( $scratch, "$fileName.$ext_out" );
 			$minFile = File::Spec->catfile( $scratch, $MIN, "$fileName.$ext_out" );
@@ -803,11 +803,11 @@ sub run {
 
 	#TODO: implement subs iteration - allow arguments for subs - default "current" directory.
 
-	my ( $filesByExtAndDir, $filesForSourceCommands ) = getFilenamesByType( $config );
+	my ( $filesByTypeAndDir, $filesForSourceCommands ) = getFilenamesByType( $config );
 
-	makeFiles( $config, $filesByExtAndDir );
+	makeFiles( $config, $filesByTypeAndDir );
 
-	moveToTarget( $config, $filesByExtAndDir, $config->{workDir} );
+	moveToTarget( $config, $filesByTypeAndDir, $config->{workDir} );
 
 	cleanUpResources( $config );
 
