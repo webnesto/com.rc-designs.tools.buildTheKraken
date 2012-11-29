@@ -210,42 +210,58 @@ sub getFilenamesByType {
 }
 
 sub parseProdContent {
-  my ( $file, $argStates, $includedArgs, $workDir )  = @_;
-  my @argStates = @{ $argStates };
+  my ( $file, $includedArgs, $workDir )  = @_;
+  return _parseProdContent( $file, [1], $includedArgs, $workDir );
+}
+
+sub _parseProdContent {
+  my ( $file, $isDefined_aref, $includedArgs, $workDir )  = @_;
   my @includedArgs = @{ $includedArgs };
   my $importPath;
   my $ret;
 
   if( -e $file ){
-    my $fileIO = new IO::File( $file, "r" ) or die "could not open $file";
-    while ( my $line = $fileIO->getline() ) {
+    my $fh = new IO::File( $file, "r" );
+    unless( defined $fh ) {
+      croak "Could not open \"$file\" for reading: $!";
+    }
 
-      if ( $line =~ /\#build_import\s+(.*)/ ) {
+    # This is just for the current file.
+    my $ifdefCount = 0;
+
+    while ( <$fh> ) {
+
+      if ( m/\#build_import\s+([^\s]+)/ ) {
         $importPath = File::Spec->catfile( $workDir, $1 );
         printLog( "prod - importing: $importPath", '' );
-        $ret.= parseProdContent( $importPath, \@argStates, \@includedArgs, $workDir );
-      } else {
+        $ret.= _parseProdContent( $importPath, $isDefined_aref, \@includedArgs, $workDir );
+      }
+      else {
 
         if(
-          ( $line =~ /\#endif/ )
-        &&  ( scalar( @argStates ) > 1 ) #ensure that there's an argState left to shift (protects against forgotten "endifs" left in files without openers)
+          ( m/\#endif/ )
+        &&  ( $ifdefCount > 0 ) #ensure that there's an argState left to shift (protects against forgotten "endifs" left in files without openers)
         ){
-          shift( @argStates );
+          shift( @$isDefined_aref ); # Remove the boolean from the start of the array.
           next;
         }
-        if ( $line =~ /\#ifdef\s+(\w+)/ ) {
+
+        if ( m/\#ifdef\s+(\w+)/ ) {
           my $arg = $1;
-          if ( defined Utils::indexOf( $arg, \@includedArgs ) && ( $argStates[0] ) ) {
-            unshift( @argStates, 1 );
-          } else {
-            unshift( @argStates, 0 );
+          if ( defined Utils::indexOf( $arg, \@includedArgs ) && ( $isDefined_aref->[0] ) ) {
+            unshift( @$isDefined_aref, 1 );
+          }
+          else {
+            unshift( @$isDefined_aref, 0 );
           }
         } #TODO: consider reversal of logic for ifndef directives.  What's their use in a JS build system?
-        $ret.= $line if ( $argStates[0] );
+
+
+        $ret.= $_ if ( $isDefined_aref->[0] );
       }
 
     }
-    undef $fileIO;
+    undef $fh;
   } else {
             croak "Expected file does not exist for parsing: $file";
   }
@@ -465,14 +481,9 @@ sub makeFiles {
 
   my ( $config, $filesByTypeAndDir ) = @_;
 
-  my $scratch = $config->{ folders }->{ scratch };
-  my $folders_build = $config->{ folders }->{ build };
-  my $importroot = $config->{ importroot };
   my $build = $config->{ buildType };
   my $sourceUrl = $config->{ dev }->{ url };
   my $keepers = $config->{ prod }->{ keep };
-
-#HERE
 
   for my $type ( keys %{ $filesByTypeAndDir } ) {
     my $typeProps = $config->{ typeProps }->{ $type };
@@ -485,12 +496,12 @@ sub makeFiles {
     $blockComment =~ s/$REPLACE/$WARNING/;
     
     my $includeString = $typeProps->{dev_include};
-    my $outputPath = File::Spec->catdir( $config->{root}, $ext_build, $folders_build );
+    my $outputPath = File::Spec->catdir( $config->{root}, $ext_build, $config->{ folders }->{ build } );
 
     # Nomenclature note: Each directory in the source-tree becomes a file in the output-tree.
     # So we are iterating over keys which are directory names, but they are used here as the file name.
     for my $filename ( keys %{ $filesByTypeAndDir->{ $type } } ){
-      my $file = File::Spec->catfile( $scratch, "$filename.$ext_out" );
+      my $file = File::Spec->catfile( $config->{ folders }->{ scratch }, "$filename.$ext_out" );
 
       printLog( "making file $file" );
       my $fh = new IO::File $file, 'w';
@@ -510,15 +521,15 @@ sub makeFiles {
 
         printLog( "\tadding $fromFile" );
 
-        if ( $build eq $BUILD_TYPE_PROD ) {
-          my $tmpFile = parseProdContent( $fromFile, [1], $keepers, $importroot );
+        if ( $config->{ buildType } eq $BUILD_TYPE_PROD ) {
+          my $tmpFile = parseProdContent( $fromFile, $keepers, $config->{ importroot } );
           $fh->print( $tmpFile ) if $tmpFile;
         }
-        elsif ( $build eq $BUILD_TYPE_DEV ) {
-          my $tmpFile = parseDevContent( $fromFile, $includeString, $sourceUrl, $importroot , $extension_out_dev );
+        elsif ( $config->{ buildType } eq $BUILD_TYPE_DEV ) {
+          my $tmpFile = parseDevContent( $fromFile, $includeString, $sourceUrl, $config->{ importroot } , $extension_out_dev );
           $fh->print( $tmpFile ) if $tmpFile;
 
-          # generate relative path
+          # Get the path to the source file, relative to the configured "root" directory.
           my $relPath = File::Spec->abs2rel( $fromFile, $config->{root} );
 
           $relPath = "$sourceUrl$relPath";    #remains relative as long as $sourceUrl has not been set
@@ -534,6 +545,7 @@ sub makeFiles {
       }
       
       $fh->print( $typeProps->{ postpend } );
+
       undef $fh; # Auto-closes the filehandle.
     }
 
