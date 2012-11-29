@@ -220,9 +220,9 @@ sub parseProdContent {
     my $fileIO = new IO::File( $file, "r" ) or die "could not open $file";
     while ( my $line = $fileIO->getline() ) {
 
-      if ( $line =~ /\#build_import\s*([^\s]*)/ ) {
+      if ( $line =~ /\#build_import\s+(.*)/ ) {
         $importPath = File::Spec->catfile( $workDir, $1 );
-        printLog( "prod - importing: $importPath \n\n" );
+        printLog( "prod - importing: $importPath", '' );
         $ret.= parseProdContent( $importPath, \@argStates, \@includedArgs, $workDir );
       } else {
 
@@ -233,7 +233,7 @@ sub parseProdContent {
           shift( @argStates );
           next;
         }
-        if ( $line =~ /\#ifdef\s*(\w+)/ ) {
+        if ( $line =~ /\#ifdef\s+(\w+)/ ) {
           my $arg = $1;
           if ( defined Utils::indexOf( $arg, \@includedArgs ) && ( $argStates[0] ) ) {
             unshift( @argStates, 1 );
@@ -275,7 +275,7 @@ sub parseDevContent {
         if( $recurse ){
           $ret.= $recurse;
         }
-        $ret.= $tmpStr."\n";
+        $ret.= $tmpStr . $/;
       }
 
     }
@@ -287,7 +287,7 @@ sub parseDevContent {
 sub replaceExtension{
   my ( $path, $ext ) = @_;
   if( $ext ){
-    $path =~ s/(.*)\.[^\.]*$/$1.$ext/;
+    $path =~ s,[^.]+$,$ext,;
   }
   return $path;
 }
@@ -295,10 +295,7 @@ sub replaceExtension{
 
 sub getFolderToIndex {
   my ( $folders, $index ) = @_;
-  my $return = join( "/", @{$folders}[0..( $index + 0 )] );
-  #printLog( "getFolderToIndex:\n @{$folders} \n $index" );
-  #printLog( "  return: $return \n" );
-  return $return;
+  return join( "/", @{$folders}[0..( $index + 0 )] );
 }
 
 sub indexOfPatternArray{
@@ -474,84 +471,71 @@ sub makeFiles {
   my $build = $config->{ buildType };
   my $sourceUrl = $config->{ dev }->{ url };
   my $keepers = $config->{ prod }->{ keep };
-  my $type;
-  my $ext;
-  my $ext_out;
-  my $ext_build;
-  my $fileName;
-  my $file;
-  my $fromFile;
-  my $typeProps;
-  my $blockComment;
-  my $buildSort;
-  my $includeString;
-  my $extension_out_dev;
-  my $tmpFile;
-  my $tmpStr;
-  my $relPath;
-  my $outputPath;
-  my @argStates;
-  my @fromFiles;
 
 #HERE
 
-  foreach $type ( keys %{ $filesByTypeAndDir } ) {
-    $typeProps = $config->{ typeProps }->{ $type };
-    $ext = $typeProps->{ extension };
-    $ext_out = $typeProps->{ extension_out } ? $typeProps->{ extension_out } : $ext;
-    $ext_build = ( $typeProps->{ build } ) ? $typeProps->{ build } : $ext;
-    $extension_out_dev = $typeProps->{ extension_out_dev };
-    $blockComment = $typeProps->{ block_comment };
+  for my $type ( keys %{ $filesByTypeAndDir } ) {
+    my $typeProps = $config->{ typeProps }->{ $type };
+    my $ext = $typeProps->{ extension };
+    my $ext_out = $typeProps->{ extension_out } ? $typeProps->{ extension_out } : $ext;
+    my $ext_build = ( $typeProps->{ build } ) ? $typeProps->{ build } : $ext;
+    my $extension_out_dev = $typeProps->{ extension_out_dev };
+    
+    my $blockComment = $typeProps->{ block_comment };
     $blockComment =~ s/$REPLACE/$WARNING/;
-     $includeString = $typeProps->{dev_include};
-    $outputPath = File::Spec->catdir( $config->{root}, $ext_build, $folders_build );
+    
+    my $includeString = $typeProps->{dev_include};
+    my $outputPath = File::Spec->catdir( $config->{root}, $ext_build, $folders_build );
 
-    foreach $fileName ( keys %{ $filesByTypeAndDir->{ $type } } ){
-      $file = File::Spec->catfile( $scratch, "$fileName.$ext_out" );
+    # Nomenclature note: Each directory in the source-tree becomes a file in the output-tree.
+    # So we are iterating over keys which are directory names, but they are used here as the file name.
+    for my $filename ( keys %{ $filesByTypeAndDir->{ $type } } ){
+      my $file = File::Spec->catfile( $scratch, "$filename.$ext_out" );
 
-      printLog( "making file: $file" );
-      open FILE, ">$file" or die "Could not open $file\n";
-      print FILE $blockComment."\n";
-      print FILE $typeProps->{ prepend };
+      printLog( "making file $file" );
+      my $fh = new IO::File $file, 'w';
+      unless( defined $fh ) {
+        croak "Could not open file \"$file\": $!";
+      }
 
-      @argStates = (1);
+      $fh->print( $blockComment .  $/ );
+      $fh->print( $typeProps->{ prepend } );
 
-      $buildSort = getBuildSorter( $typeProps->{ firsts }, $typeProps->{ lasts } );
+      my $buildSort = getBuildSorter( $typeProps->{ firsts }, $typeProps->{ lasts } );
 
-      @fromFiles = sort $buildSort @{ $filesByTypeAndDir->{ $type }->{ $fileName } };
-      foreach $fromFile ( @fromFiles ){
+      my @fromFiles = sort $buildSort @{ $filesByTypeAndDir->{ $type }->{ $filename } };
+      
+      for my $fromFile ( @fromFiles ){
         $fromFile = Cwd::realpath( $fromFile );
+
         printLog( "\tadding $fromFile" );
+
         if ( $build eq $BUILD_TYPE_PROD ) {
-          $tmpFile = parseProdContent( $fromFile, \@argStates, $keepers, $importroot );
-          print FILE $tmpFile if $tmpFile;
-        } elsif ( $build eq $BUILD_TYPE_DEV ) {
-          my $tmpStr;
-          my $arg;
-          $tmpStr = parseDevContent( $fromFile, $includeString, $sourceUrl, $importroot , $extension_out_dev );
-          if( $tmpStr ){
-            print FILE $tmpStr;
-          }
+          my $tmpFile = parseProdContent( $fromFile, [1], $keepers, $importroot );
+          $fh->print( $tmpFile ) if $tmpFile;
+        }
+        elsif ( $build eq $BUILD_TYPE_DEV ) {
+          my $tmpFile = parseDevContent( $fromFile, $includeString, $sourceUrl, $importroot , $extension_out_dev );
+          $fh->print( $tmpFile ) if $tmpFile;
 
           # generate relative path
-          $relPath = File::Spec->abs2rel( $fromFile, $config->{root} ); #$fromFile; #
+          my $relPath = File::Spec->abs2rel( $fromFile, $config->{root} );
 
           $relPath = "$sourceUrl$relPath";    #remains relative as long as $sourceUrl has not been set
           $relPath = replaceExtension( $relPath, $extension_out_dev );
-          $tmpStr = $includeString;
+          
+          my $includeString = $typeProps->{dev_include};
+          $includeString =~ s/$REPLACE/$relPath/;
 
-          $tmpStr =~ s/$REPLACE/$relPath/;
-          printLog( "\tdev - including: $tmpStr" );
-          print FILE $tmpStr."\n";
-
+          printLog( "\tdev - including: $includeString" );
+          $fh->print( $includeString . $/ );
         }
 
       }
-
-      print FILE $typeProps->{ postpend };
-      close FILE;
+      
+      $fh->print( $typeProps->{ postpend } );
+      undef $fh; # Auto-closes the filehandle.
     }
-
 
   }
 }
@@ -569,7 +553,7 @@ sub moveToTarget {
   my $buildFolder;
   my $ext;
   my $ext_out;
-  my $fileName;
+  my $filename;
   my $file;
   my $minFile;
   my $finalFile;
@@ -616,10 +600,10 @@ sub moveToTarget {
       emptyDirOfType( $buildFolder, $ext_out );
     }
 
-    foreach $fileName ( keys %{ $filesByTypeAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
+    foreach $filename ( keys %{ $filesByTypeAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
 
-      $file = File::Spec->catfile( $scratch, "$fileName.$ext_out" );
-      $minFile = File::Spec->catfile( $scratch, $MIN, "$fileName.$ext_out" );
+      $file = File::Spec->catfile( $scratch, "$filename.$ext_out" );
+      $minFile = File::Spec->catfile( $scratch, $MIN, "$filename.$ext_out" );
       if(
         ( $build eq $BUILD_TYPE_PROD )
       ){
@@ -641,7 +625,7 @@ sub moveToTarget {
         copy( $file, $minFile ) or printLog( "Could not copy $file to $minFile: $!" );
       }
 
-      $finalFile = File::Spec->catfile( $buildFolder, "$fileName.$ext_out" );
+      $finalFile = File::Spec->catfile( $buildFolder, "$filename.$ext_out" );
       copy( $minFile, $finalFile ) or printLog( "Could not copy $minFile, to $finalFile: $!" );
 
       printLog("\tcreated $finalFile" );
