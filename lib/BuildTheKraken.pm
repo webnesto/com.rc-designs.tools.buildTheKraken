@@ -210,15 +210,9 @@ sub getFilenamesByType {
 }
 
 sub parseProdContent {
-  my ( $file, $includedArgs, $workDir )  = @_;
-  return _parseProdContent( $file, [1], $includedArgs, $workDir );
-}
-
-sub _parseProdContent {
-  my ( $file, $isDefined_aref, $includedArgs, $workDir )  = @_;
-  my @includedArgs = @{ $includedArgs };
+  my ( $file, $includedArgsRef, $outputDir )  = @_;
   my $importPath;
-  my $ret;
+  my $content;
 
   if( -e $file ){
     my $fh = new IO::File( $file, "r" );
@@ -226,46 +220,64 @@ sub _parseProdContent {
       croak "Could not open \"$file\" for reading: $!";
     }
 
+    my $ignoreInput = ''; # false
+
     # This is just for the current file.
     my $ifdefCount = 0;
 
+    my $ifdefPattern = qr/#ifdef\s+(\w+)/;
+    my $endifPattern = qr/#endif/;
+    my $importPattern = qr/#build_import\s+([^\s]+)/;
+
     while ( <$fh> ) {
 
-      if ( m/\#build_import\s+([^\s]+)/ ) {
-        $importPath = File::Spec->catfile( $workDir, $1 );
-        printLog( "prod - importing: $importPath", '' );
-        $ret.= _parseProdContent( $importPath, $isDefined_aref, \@includedArgs, $workDir );
+      if( $ignoreInput ) {
+        # We are inside an #ifdef block whose arg is NOT defined.
+        # Ignore everything except the #endif.
+        next unless /$endifPattern/;
       }
-      else {
 
-        if(
-          ( m/\#endif/ )
-        &&  ( $ifdefCount > 0 ) #ensure that there's an argState left to shift (protects against forgotten "endifs" left in files without openers)
-        ){
-          shift( @$isDefined_aref ); # Remove the boolean from the start of the array.
-          next;
+      if( /$endifPattern/ ) {
+        $ignoreInput = '';
+        if( $ifdefCount > 0 ) {
+          $ifdefCount--;
         }
-
-        if ( m/\#ifdef\s+(\w+)/ ) {
-          my $arg = $1;
-          if ( defined Utils::indexOf( $arg, \@includedArgs ) && ( $isDefined_aref->[0] ) ) {
-            unshift( @$isDefined_aref, 1 );
-          }
-          else {
-            unshift( @$isDefined_aref, 0 );
-          }
-        } #TODO: consider reversal of logic for ifndef directives.  What's their use in a JS build system?
-
-
-        $ret.= $_ if ( $isDefined_aref->[0] );
+        else {
+          carp "File \"$file\" is has too many #endif lines."
+        }
+        next;
       }
+
+      if( /$ifdefPattern/ ) {
+        unless( defined Utils::indexOf( $1, $includedArgsRef ) ) {
+          $ignoreInput = 1;
+        }
+        $ifdefCount++;
+        next;
+      }
+
+      if( /$importPattern/ ) {
+        $importPath = File::Spec->catfile( $outputDir, $1 );
+        printLog( "prod - importing: $importPath", '' );
+        $content .= parseProdContent( $importPath, $includedArgsRef, $outputDir );
+        next;
+      }
+
+      $content .= $_;
+
 
     }
     undef $fh;
-  } else {
-            croak "Expected file does not exist for parsing: $file";
+
+    if( $ifdefCount > 0 ) {
+      my $lines = ( $ifdefCount > 1 ) ? 'lines' : 'line';
+      carp "File \"$file\" is missing $ifdefCount closing #endif $lines.";
+    }
   }
-  return $ret;
+  else {
+    croak "Expected file does not exist for parsing: $file";
+  }
+  return $content;
 }
 
 sub parseDevContent {
