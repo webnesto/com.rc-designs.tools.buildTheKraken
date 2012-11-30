@@ -45,23 +45,30 @@ use Utils qw( printLog extend extendNew from_json_file emptyDirOfType );
 
 #Variables
 
-my $DEFAULT_CONFIG_FILE = "build.json";
-my $REPLACE = "-CONTENT-";           # Used in replacement of dev build strings.
-my $BUILD_TYPE_DEV    = 'dev';
-my $BUILD_TYPE_PROD   = 'prod';
-my $WARNING = 'GENERATED FILE - DO NOT EDIT';
-my $MIN = "min";
-my $SCRATCH_DIR = "tmp";
-my @DIRECTORY_VALUE_KEYS = ( 'root', 'importroot' );
+my $DEFAULT_CONFIG_FILE  = 'build.json';
+my $BUILD_TYPE_DEV       = 'dev';
+my $BUILD_TYPE_PROD      = 'prod';
+my $WARNING_MESSAGE      = 'GENERATED FILE - DO NOT EDIT';
+my $MIN_DIR              = 'min';
+my $SCRATCH_DIR          = "tmp";
+my @DIRECTORY_VALUE_KEYS = ( 'root', 'importroot' );  # Their values will get turned into absolute paths.
+
+# Patterns
+
+my $IFDEF_PATTERN   = qr/#ifdef\s+(\w+)/;
+my $ENDIF_PATTERN   = qr/#endif/;
+my $IMPORT_PATTERN  = qr/#build_import\s+([^\s]+)/;
+my $REPLACE_PATTERN = qr/-CONTENT-/;
+
 
 #Functions
 
 sub logStart {
   printLog(
-    "++++++++++++++++"
-  ,  "Build The Kraken!: "
-  .  POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
-  .  $/
+    '++++++++++++++++'
+  , 'Build The Kraken!: '
+  . POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
+  . $/
   );
 }
 
@@ -166,15 +173,15 @@ sub getFilenamesByType {
 
     chdir $targetedSrcDir;
 
-    for my $dir ( glob "*" ) {
+    for my $dir ( glob '*' ) {
       -d $dir or next;    # Only using folders.  Skipping files.
       if( indexOfPatternArray( $dir, \@ignores ) == -1 ) {
-                                # If we are not configured to ignore this directory...
+        # If we are not configured to ignore this directory...
         printLog( "\t+ folder: $dir" );
 
-                                # Make sure there is an array allocated for the extension and directory.
-                                unless( defined $filesByTypeAndDir->{ $type }->{ $dir } ) {
-                                    $filesByTypeAndDir->{ $type }->{ $dir } = ();
+        # Make sure there is an array allocated for the extension and directory.
+        unless( defined $filesByTypeAndDir->{ $type }->{ $dir } ) {
+          $filesByTypeAndDir->{ $type }->{ $dir } = ();
         }
 
         find(
@@ -225,19 +232,15 @@ sub parseProdContent {
     # This is just for the current file.
     my $ifdefCount = 0;
 
-    my $ifdefPattern = qr/#ifdef\s+(\w+)/;
-    my $endifPattern = qr/#endif/;
-    my $importPattern = qr/#build_import\s+([^\s]+)/;
-
     while ( <$fh> ) {
 
       if( $ignoreInput ) {
         # We are inside an #ifdef block whose arg is NOT defined.
         # Ignore everything except the #endif.
-        next unless /$endifPattern/;
+        next unless /$ENDIF_PATTERN/;
       }
 
-      if( /$endifPattern/ ) {
+      if( /$ENDIF_PATTERN/ ) {
         $ignoreInput = '';
         if( $ifdefCount > 0 ) {
           $ifdefCount--;
@@ -248,7 +251,7 @@ sub parseProdContent {
         next;
       }
 
-      if( /$ifdefPattern/ ) {
+      if( /$IFDEF_PATTERN/ ) {
         unless( defined Utils::indexOf( $1, $includedArgsRef ) ) {
           $ignoreInput = 1;
         }
@@ -256,13 +259,14 @@ sub parseProdContent {
         next;
       }
 
-      if( /$importPattern/ ) {
+      if( /$IMPORT_PATTERN/ ) {
         $importPath = File::Spec->catfile( $outputDir, $1 );
         printLog( "prod - importing: $importPath", '' );
         $content .= parseProdContent( $importPath, $includedArgsRef, $outputDir );
         next;
       }
 
+      # This is just a regular, not a directive, line.
       $content .= $_;
 
 
@@ -281,35 +285,42 @@ sub parseProdContent {
 }
 
 sub parseDevContent {
-  my ( $file, $includeString, $sourceUrl, $workDir, $extension_out_dev ) = @_;
-  my $tmpStr;
-  my $importPath;
-  my $import;
-  my $recurse;
-  my $ret;
+  my ( $file, $typeProps, $config ) = @_;
 
-  if( -e $file ){
-    my $fileIO = new IO::File( $file, "r" ) or die "could not open $file";
-    while ( my $line = $fileIO->getline() ) {
+  my $content = '';
 
-      if ( $line =~ /\#build_import\s*([^\s]*)/ ) {
-        $import = "$sourceUrl$1";
-        $import = replaceExtension( $import, $extension_out_dev );
-        $tmpStr = $includeString;
-        $tmpStr =~ s/$REPLACE/$import/;
-        $importPath = File::Spec->catfile( $workDir, $import );
-        printLog( "\tdev - importing: $tmpStr" );
-        $recurse = parseDevContent( $importPath, $includeString, $sourceUrl, $extension_out_dev );
-        if( $recurse ){
-          $ret.= $recurse;
-        }
-        $ret.= $tmpStr . $/;
-      }
-
+  if( -e $file ) {
+    my $fh = new IO::File( $file, 'r' );
+    unless( defined $fh ) {
+      croak "Could not open \"$file\" for reading: $!";
     }
-    undef $fileIO;
+
+    while( <$fh> ) {
+      if( /$IMPORT_PATTERN/ ) {
+        my $relImportPath = $1;
+
+        if( defined $config->{ dev }->{ url } ) {
+          $relImportPath = File::Spec->catfile( $config->{ dev }->{ url }, $relImportPath );
+        }
+        $relImportPath = replaceExtension( $relImportPath, $typeProps->{ extension_out_dev } );
+
+        my $absImportPath = File::Spec->catfile( $config->{ importroot }, $relImportPath );
+
+        my $includeString = $typeProps->{ dev_include };
+        $includeString =~ s/$REPLACE_PATTERN/$relImportPath/;
+
+        printLog( "\tdev - importing: $includeString" );
+
+        $content .= parseDevContent( $absImportPath, $typeProps, $config );
+        
+        $content .= $includeString . $/;
+      }
+    }
+
+    undef $fh;
   }
-  return $ret;
+
+  return $content;
 }
 
 sub replaceExtension{
@@ -494,7 +505,6 @@ sub makeFiles {
   my ( $config, $filesByTypeAndDir ) = @_;
 
   my $build = $config->{ buildType };
-  my $sourceUrl = $config->{ dev }->{ url };
   my $keepers = $config->{ prod }->{ keep };
 
   for my $type ( keys %{ $filesByTypeAndDir } ) {
@@ -505,7 +515,7 @@ sub makeFiles {
     my $extension_out_dev = $typeProps->{ extension_out_dev };
     
     my $blockComment = $typeProps->{ block_comment };
-    $blockComment =~ s/$REPLACE/$WARNING/;
+    $blockComment =~ s/$REPLACE_PATTERN/$WARNING_MESSAGE/;
     
     my $includeString = $typeProps->{dev_include};
     my $outputPath = File::Spec->catdir( $config->{root}, $ext_build, $config->{ folders }->{ build } );
@@ -538,17 +548,19 @@ sub makeFiles {
           $fh->print( $tmpFile ) if $tmpFile;
         }
         elsif ( $config->{ buildType } eq $BUILD_TYPE_DEV ) {
-          my $tmpFile = parseDevContent( $fromFile, $includeString, $sourceUrl, $config->{ importroot } , $extension_out_dev );
+          my $tmpFile = parseDevContent( $fromFile, $typeProps, $config );
           $fh->print( $tmpFile ) if $tmpFile;
 
           # Get the path to the source file, relative to the configured "root" directory.
           my $relPath = File::Spec->abs2rel( $fromFile, $config->{root} );
+          $relPath = replaceExtension( $relPath, $extension_out_dev ); # If $extension_out_dev is undefined, does nothing.
 
-          $relPath = "$sourceUrl$relPath";    #remains relative as long as $sourceUrl has not been set
-          $relPath = replaceExtension( $relPath, $extension_out_dev );
-          
+          if( defined $config->{dev}->{url} ) {
+            $relPath = File::Spec->catfile( $config->{dev}->{url}, $relPath );
+          }
+
           my $includeString = $typeProps->{dev_include};
-          $includeString =~ s/$REPLACE/$relPath/;
+          $includeString =~ s/$REPLACE_PATTERN/$relPath/;
 
           printLog( "\tdev - including: $includeString" );
           $fh->print( $includeString . $/ );
@@ -594,7 +606,7 @@ sub moveToTarget {
   }
 
 
-  $minPath = File::Spec->catdir( $scratch, $MIN );
+  $minPath = File::Spec->catdir( $scratch, $MIN_DIR );
   -e $minPath or mkdir $minPath or printLog( "Cannot make minPath: $minPath: $!" );
 
   foreach $type( keys %{ $filesByTypeAndDir } ){
@@ -627,7 +639,7 @@ sub moveToTarget {
     foreach $filename ( keys %{ $filesByTypeAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
 
       $file = File::Spec->catfile( $scratch, "$filename.$ext_out" );
-      $minFile = File::Spec->catfile( $scratch, $MIN, "$filename.$ext_out" );
+      $minFile = File::Spec->catfile( $scratch, $MIN_DIR, "$filename.$ext_out" );
       if(
         ( $build eq $BUILD_TYPE_PROD )
       ){
@@ -764,7 +776,13 @@ sub normalizeConfigurationValues {
     # This should be a path relative to the "root" directory for the run.  Default: 'tmp'
     defined $config->{ folders }->{ scratch } or $config->{ folders }->{ scratch } = $SCRATCH_DIR;
 
-
+    if( defined $config->{dev}->{url} ) {
+      # Trim it.
+      $config->{dev}->{url} =~ s,^\s+|\s+$,,g;
+      if( $config->{dev}->{url} eq '' ) {
+        undef $config->{dev}->{url};
+      }
+    }
     
 
     return $config;
