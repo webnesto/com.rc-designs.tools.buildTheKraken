@@ -43,6 +43,9 @@ use IO::File;
 use List::Util qw( first );
 use Utils qw( printLog extend extendNew from_json_file emptyDirOfType );
 
+use constant TRUE  => 1;
+use constant FALSE => '';
+
 #Variables
 
 my $DEFAULT_CONFIG_FILE  = 'build.json';
@@ -59,7 +62,7 @@ my $IFDEF_PATTERN   = qr/#ifdef\s+(\w+)/;
 my $ENDIF_PATTERN   = qr/#endif/;
 my $IMPORT_PATTERN  = qr/#build_import\s+([^\s]+)/;
 my $REPLACE_PATTERN = qr/-CONTENT-/;
-
+my $TRIMMABLE_WHITESPACE = qr/^\s+|\s+$/;
 
 #Functions
 
@@ -156,7 +159,7 @@ sub getFilenamesByType {
         my $filesForSourceCommands = {};
 
   for my $type ( @{ $config->{ types } } ){
-    my $typeProps = $config->{ typeProps }->{ $type } or croak "No properties for filetype: $type";
+    my $typeProps = $config->{ typeProps }->{ $type };
     my $ext = $typeProps->{ extension } or croak "No extension for filetype: $type";
     my @ignores = ( @{ $config->{ ignores } }, @{ $typeProps->{ ignores } } );
 
@@ -227,7 +230,7 @@ sub parseProdContent {
       croak "Could not open \"$file\" for reading: $!";
     }
 
-    my $ignoreInput = ''; # false
+    my $ignoreInput = FALSE;
 
     # This is just for the current file.
     my $ifdefCount = 0;
@@ -241,7 +244,7 @@ sub parseProdContent {
       }
 
       if( /$ENDIF_PATTERN/ ) {
-        $ignoreInput = '';
+        $ignoreInput = FALSE;
         if( $ifdefCount > 0 ) {
           $ifdefCount--;
         }
@@ -253,7 +256,7 @@ sub parseProdContent {
 
       if( /$IFDEF_PATTERN/ ) {
         unless( defined Utils::indexOf( $1, $includedArgsRef ) ) {
-          $ignoreInput = 1;
+          $ignoreInput = TRUE;
         }
         $ifdefCount++;
         next;
@@ -360,7 +363,7 @@ sub indexOfPatternArray{
     }
   } 0 .. $#$array_ref;
 
-        return ( defined $index ) ? $index : -1;
+  return ( defined $index ) ? $index : -1;
 }
 
 sub getBuildSorter {
@@ -397,10 +400,10 @@ sub getBuildSorter {
       $bLastIndex = indexOfPatternArray( $bDirs[ $#bDirs ], $lasts )
     }
 
-    my $aIsAFirst = ( $aFirstIndex > -1 ) ? 1 : 0;
-    my $bIsAFirst = ( $bFirstIndex > -1 ) ? 1 : 0;
-    my $aIsALast = ( $aLastIndex > -1 ) ? 1 : 0;
-    my $bIsALast = ( $bLastIndex > -1 ) ? 1 : 0;
+    my $aIsAFirst = ( $aFirstIndex > -1 );
+    my $bIsAFirst = ( $bFirstIndex > -1 );
+    my $aIsALast  = ( $aLastIndex > -1 );
+    my $bIsALast  = ( $bLastIndex > -1 );
 
     if( $aIsAFirst or $bIsAFirst ){ # If both are marked for first and are in the same directory, use the  passed array file sorting rules
       if(
@@ -675,7 +678,7 @@ sub doSourceCommands {
   my $root = $config->{ root };
   my $typeProps;
   my $doCommands;
-  my $build = $config->{ buildType } || $BUILD_TYPE_PROD;
+  my $build = $config->{ buildType };
   my @files;
   my $ext;
   my @source_commands;
@@ -704,9 +707,9 @@ sub doSourceCommands {
       $doCommands eq $build
     or  $doCommands eq "both"
     ){
-      $doCommands = 1;
+      $doCommands = TRUE;
     } else {
-      $doCommands = 0;
+      $doCommands = FALSE;
     }
     if( $doCommands ){
       foreach $command ( @source_commands ){
@@ -750,6 +753,8 @@ sub doSourceCommands {
 # }
 
 sub normalizeConfigurationValues {
+# Also validates.
+#
 # Expects:
 #   $config: The configuration hash reference.
 #   $workDir: The current working directory.
@@ -758,7 +763,40 @@ sub normalizeConfigurationValues {
     my $workDir = shift || Cwd::getcwd();
     $config->{ workDir } = Cwd::abs_path( $workDir );
 
+    # Check that there is a set of type properties for each enumerated type.
+    my @badTypes = ();
+    for( @{$config->{types}} ) {
+      if( ( ! defined $config->{typeProps}->{$_} )
+          ||
+          ( ref( $config->{typeProps}->{$_} ) ne 'HASH' )
+        ) {
+        push @badTypes, $_;
+      }
+    }
+    if( scalar @badTypes > 0 ) {
+      croak 'No properties configured for types: ' . join( ', ', @badTypes );
+    }
+
+    # Now check that the type properties hashref contains a valid 'extension' key.
+    for( @{$config->{types}} ) {
+      if( ! defined $config->{typeProps}->{$_}->{extension} ) {
+        push @badTypes, $_;
+        next;
+      }
+      $config->{typeProps}->{$_}->{extension} =~ s,$TRIMMABLE_WHITESPACE,,g;
+      
+      # The 'a' flag restricts "\w" to [A-Za-z0-9_].
+      if( $config->{typeProps}->{$_}->{extension} !~ m,^\w+$,a ) {
+        push @badTypes, $_;
+      }
+    }
+    if( scalar @badTypes > 0 ) {
+      croak 'Missing or invalid extensions configured for types: ' . join( ', ', @badTypes );
+    }
+
+
     # The only valid values are 'prod' ($BUILD_TYPE_PROD) and 'dev' ($BUILD_TYPE_DEV).
+    # If the provided value is not $BUILD_TYPE_DEV, we coerce it to $BUILD_TYPE_PROD.
     $config->{ buildType } eq $BUILD_TYPE_DEV or $config->{ buildType } = $BUILD_TYPE_PROD;
 
     # $config->{importroot} is relative to $config->{root}.
@@ -778,7 +816,7 @@ sub normalizeConfigurationValues {
 
     if( defined $config->{dev}->{url} ) {
       # Trim it.
-      $config->{dev}->{url} =~ s,^\s+|\s+$,,g;
+      $config->{dev}->{url} =~ s,$TRIMMABLE_WHITESPACE,,g;
       if( $config->{dev}->{url} eq '' ) {
         undef $config->{dev}->{url};
       }
