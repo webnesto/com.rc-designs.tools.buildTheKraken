@@ -513,7 +513,7 @@ sub makeFiles {
   for my $type ( keys %{ $filesByTypeAndDir } ) {
     my $typeProps = $config->{ typeProps }->{ $type };
     my $ext = $typeProps->{ extension };
-    my $ext_out = $typeProps->{ extension_out } ? $typeProps->{ extension_out } : $ext;
+    my $ext_out = $typeProps->{ extension_out };
     my $ext_build = ( $typeProps->{ build } ) ? $typeProps->{ build } : $ext;
     my $extension_out_dev = $typeProps->{ extension_out_dev };
     
@@ -580,58 +580,33 @@ sub makeFiles {
 }
 
 sub moveToTarget {
-  my ( $config, $filesByTypeAndDir, $workDir ) = @_;
-  my $scratch = $config->{ folders }->{ scratch };
+  my ( $config, $filesByTypeAndDir ) = @_;
   my $bin = $config->{ folders }->{ build };
   my $build = $config->{ buildType };
   my $root = $config->{ root };
   my $doDeletes = $config->{ doDeletes };
-  my $minPath;
-  my $type;
-  my $typeProps;
-  my $buildFolder;
-  my $ext;
-  my $ext_out;
-  my $filename;
-  my $file;
-  my $minFile;
-  my $finalFile;
-  my $compressable;
-  my @commands;
-  my $rawcommand;
-  my $command;
 
-  if( File::Spec->file_name_is_absolute( $root ) ){
-    $root = $root;
-  } else {
-    $root = File::Spec->catfile( $workDir, $root );
-    $root = Cwd::realpath( $root );
-  }
-
-
-  $minPath = File::Spec->catdir( $scratch, $MIN_DIR );
-  -e $minPath or mkdir $minPath or printLog( "Cannot make minPath: $minPath: $!" );
-
-  foreach $type( keys %{ $filesByTypeAndDir } ){
-    $typeProps = $config->{ typeProps }->{ $type };
-    $ext = $typeProps->{ extension };
-    $ext_out = $typeProps->{ extension_out } ? $typeProps->{ extension_out } : $ext;
-    $buildFolder = $typeProps->{ build };
+  for my $type ( keys %{ $filesByTypeAndDir } ) {
+    my $typeProps = $config->{ typeProps }->{ $type };
+    my $ext = $typeProps->{ extension };
+    my $ext_out = $typeProps->{ extension_out };
+    my $buildFolder = $typeProps->{ build };
     if( $build eq $BUILD_TYPE_PROD ){
       @commands = ( $typeProps->{ production_commands } ) ? @{ $typeProps->{ production_commands } } : ();
     } else {
       @commands = ( $typeProps->{ development_commands } ) ? @{ $typeProps->{ development_commands } } : ();
     }
 
-                if( ! defined $buildFolder || $buildFolder eq '' ) {
-                    $buildFolder = File::Spec->catdir( $ext, $bin );
-                }
+    # If $buildFolder is blank...
+    if( ! defined $buildFolder || $buildFolder eq '' ) {
+      # ...then use the default.
+      $buildFolder = File::Spec->catdir( $typeProps->{ extension }, $config->{ folders }->{ build } );
+    }
 
-
+    # Prepend the root directory to make an absolute path.
     $buildFolder = File::Spec->catdir( $root, $buildFolder );
 
-                # TODO:  Ensure all parents of the $buildFolder exist.  They may not.
-
+    # make_path ensures all the necessary parent directories are created.
     -e $buildFolder or File::Path::make_path( $buildFolder ) or croak "Cannot make buildFolder \"$buildFolder\": $!";
 
     if( $doDeletes ){
@@ -641,15 +616,12 @@ sub moveToTarget {
 
     foreach $filename ( keys %{ $filesByTypeAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
 
-      $file = File::Spec->catfile( $scratch, "$filename.$ext_out" );
-      $minFile = File::Spec->catfile( $scratch, $MIN_DIR, "$filename.$ext_out" );
-      if(
-        ( $build eq $BUILD_TYPE_PROD )
-      ){
+      $file = File::Spec->catfile( $config->{ folders }->{ scratch }, "$filename.$ext_out" );
+      $minFile = File::Spec->catfile( $config->{folders}->{minimized}, "$filename.$ext_out" );
+      if( $build eq $BUILD_TYPE_PROD ) {
         copy( $file, $minFile ) or printLog( "Could not copy $file to $minFile: $!" );
 #        printLog( "running production commands on file: $file" );
-        foreach $rawcommand ( @commands ){
-          $command = $rawcommand;
+        foreach my $command ( @commands ){
           printLog( "rawcommand: $command" );
           my $scriptPath = '{scriptsPath}';
           my $infile = '{infile}';
@@ -779,16 +751,23 @@ sub normalizeConfigurationValues {
 
     # Now check that the type properties hashref contains a valid 'extension' key.
     for( @{$config->{types}} ) {
-      if( ! defined $config->{typeProps}->{$_}->{extension} ) {
+      my $typeProps = $config->{typeProps}->{$_};
+      if( ! defined $typeProps->{extension} ) {
         push @badTypes, $_;
         next;
       }
-      $config->{typeProps}->{$_}->{extension} =~ s,$TRIMMABLE_WHITESPACE,,g;
+      $typeProps->{extension} =~ s,$TRIMMABLE_WHITESPACE,,g;
       
       # The 'a' flag restricts "\w" to [A-Za-z0-9_].
-      if( $config->{typeProps}->{$_}->{extension} !~ m,^\w+$,a ) {
+      if( $typeProps->{extension} !~ m,^\w+$,a ) {
         push @badTypes, $_;
+        next;
       }
+
+      # If we are here, we have a valid extension for this type.  So we can normalize
+      # other type properties.
+      defined $typeProps->{extension_out} or $typeProps->{extension_out} = $typeProps->{extension};
+
     }
     if( scalar @badTypes > 0 ) {
       croak 'Missing or invalid extensions configured for types: ' . join( ', ', @badTypes );
@@ -814,6 +793,13 @@ sub normalizeConfigurationValues {
     # This should be a path relative to the "root" directory for the run.  Default: 'tmp'
     defined $config->{ folders }->{ scratch } or $config->{ folders }->{ scratch } = $SCRATCH_DIR;
 
+    # Now make the scratch path absolute.
+    $config->{ folders }->{ scratch } = Cwd::abs_path( $config->{ folders }->{ scratch } );
+
+    # And define a minimized-resources directory path.
+    $config->{ folders }->{ minimized } = File::Spec->catdir( $config->{ folders }->{ scratch }, $MIN_DIR );
+
+
     if( defined $config->{dev}->{url} ) {
       # Trim it.
       $config->{dev}->{url} =~ s,$TRIMMABLE_WHITESPACE,,g;
@@ -832,14 +818,23 @@ sub setUpResources {
 
     my $config = shift;
 
+    # Set up the scratch directory.
     my $scratchDir = $config->{ folders }->{ scratch };
-
 
     unless( -e $scratchDir ) {
         mkdir $scratchDir, 0777 or croak "Cannot create scratch directory \"$scratchDir\": $!";
     }
 
     -w $scratchDir or croak "The scratch directory is not writable: $scratchDir";
+
+    # And now its child directory, for minimized resources.
+    my $minDir = $config->{ folders }->{ minimized }
+
+    unless( -e $minDir ) {
+        mkdir $minDir, 0777 or croak "Cannot create minimized resources directory \"$minDir\": $!";
+    }
+
+    -w $minDir or croak "The minimized resources directory is not writable: $minDir";
 
 }
 
@@ -871,7 +866,7 @@ sub run {
 
   makeFiles( $config, $filesByTypeAndDir );
 
-  moveToTarget( $config, $filesByTypeAndDir, $config->{workDir} );
+  moveToTarget( $config, $filesByTypeAndDir );
 
   cleanUpResources( $config );
 
