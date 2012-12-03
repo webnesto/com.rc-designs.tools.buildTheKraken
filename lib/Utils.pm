@@ -43,6 +43,7 @@ our @EXPORT = qw(
   extendNew
   from_json_file
   emptyDirOfType
+  replaceVariables
 );
 
 # get index of item in array
@@ -132,6 +133,15 @@ sub emptyDirOfType {
     unlink or carp "Could not unlink $_: $!";
   }
 
+}
+
+sub replaceVariables {
+  my $contentString = shift || '';
+  my %replacements = %{ shift || {} };
+
+  $contentString =~ s,\$\{([^}]+)},$replacements{$1},g;
+  
+  return $contentString;
 }
 
 1;
