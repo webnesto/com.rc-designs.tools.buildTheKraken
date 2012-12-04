@@ -49,7 +49,7 @@ our @EXPORT = qw(
 # get index of item in array
 sub indexOf {
   my ($item, $array_ref) = @_;
-  $array_ref->[$_] eq $item && return $_ for 0..(scalar @{$array_ref}); 
+  $array_ref->[$_] eq $item && return $_ for 0..$#$array_ref; 
   return undef;
 }
 
