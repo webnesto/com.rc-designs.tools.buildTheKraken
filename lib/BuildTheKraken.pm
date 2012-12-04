@@ -236,21 +236,16 @@ sub parseProdContent {
     my $ifdefCount = 0;
 
     while ( <$fh> ) {
-
       if( $ignoreInput ) {
         # We are inside an #ifdef block whose arg is NOT defined.
         # Ignore everything except the #endif.
         next unless( /$ENDIF_PATTERN/ || /$IFDEF_PATTERN/ );
 
-        if( /$IFDEF_PATTERN/ ) {
-          $ifdefCount++;
-        }
         if( /$ENDIF_PATTERN/ ) {
           if( $ifdefCount > 0 ) {
             $ifdefCount--;
           }
           else {
-            carp "File \"$file\" is has too many #endif lines."
           }
         }
         if( $ifdefCount == 0 ) {
@@ -262,14 +257,33 @@ sub parseProdContent {
       }
 
       if( /$ENDIF_PATTERN/ ) {
+        if( $ignoreInput ) {
+            $ifdefCount--;
+        }
+        else {
+          if( $ifdefCount > 0 ) {
+            carp "File \"$file\" is has too many #endif lines.";
+          }
+        }
+        if( $ifdefCount == 0 ) {
+          $ignoreInput = FALSE;
+        }
         next;
       }
 
       if( /$IFDEF_PATTERN/ ) {
-        unless( defined Utils::indexOf( $1, $includedArgsRef ) ) {
-          $ignoreInput = TRUE;
+        if( $ignoreInput ) {
+          # Just increment the nesting counter.
+          $ifdefCount++;
+          next;
         }
-        $ifdefCount++;
+
+        # We are not already ignoring input.  Check this #ifdef.
+        if( ! defined Utils::indexOf( $1, $includedArgsRef ) ) {
+          $ignoreInput = TRUE;
+          $ifdefCount++;
+        }
+
         next;
       }
 
@@ -279,10 +293,9 @@ sub parseProdContent {
         $content .= parseProdContent( $importPath, $includedArgsRef, $outputDir );
         next;
       }
-
+      
       # This is just a regular, not a directive, line.
       $content .= $_;
-
 
     }
     undef $fh;
