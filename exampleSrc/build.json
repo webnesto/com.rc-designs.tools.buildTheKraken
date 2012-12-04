@@ -1,19 +1,19 @@
 {
-	"_" : ""
-,	"root": "../exampleOutput"
-,	"keepScratch": "true"
-,	"ignores": [
-		"imports"
-	,	"tmp"
-	]
-,	"typeProps" : {
-		"js" : {
-			"firsts" : [
-				"jquery"
-			]
-		// , 	"lasts" : [
-				// "=~^at_unset"
-			// ]
-		}
-	}
+  "_" : ""
+, "root": "../exampleOutput"
+, "keepScratch": "true"
+, "ignores": [
+    "imports"
+  , "tmp"
+  ]
+, "typeProps" : {
+    "Javascript" : {
+      "firsts" : [
+        "jquery"
+      ]
+    // , "lasts" : [
+    // "=~^at_unset"
+      // ]
+    }
+  }
 }
