@@ -51,6 +51,7 @@ use constant FALSE => '';
 my $DEFAULT_CONFIG_FILE  = 'build.json';
 my $BUILD_TYPE_DEV       = 'dev';
 my $BUILD_TYPE_PROD      = 'prod';
+my $BUILD_TYPE_BOTH      = 'both';
 my $WARNING_MESSAGE      = 'GENERATED FILE - DO NOT EDIT';
 my $MIN_DIR              = 'min';
 my $SCRATCH_DIR          = "tmp";
@@ -127,7 +128,7 @@ sub getConfigs {
 
 
   my $argConfig = {};
-  foreach my $arg ( @_ ){
+  for my $arg ( @_ ){
     if( $arg eq "-dev" ){  # Arguments override any config files
       $argConfig->{ buildType } = $BUILD_TYPE_DEV;
     } else {
@@ -637,7 +638,7 @@ sub moveToTarget {
         # This line accounts for the case where there are no production commands.
         copy( $file, $minFile ) or printLog( "Could not copy $file to $minFile: $!" );
         printLog( "running production commands on file: $file" );
-        foreach my $command ( @commands ){
+        for my $command ( @commands ){
           printLog( "rawcommand: $command" );
           my $replacementHashref = {
             scriptsPath => $Bin
@@ -668,45 +669,27 @@ sub doSourceCommands {
   printLog( "beginning source commands" );
   my ( $config, $filesForSourceCommands ) = @_;
   my $root = $config->{ root };
-  my $typeProps;
-  my $doCommands;
   my $build = $config->{ buildType };
-  my @files;
-  my @source_commands;
-  my $command;
-  my $filelist;
 
   for my $type ( keys %{ $filesForSourceCommands } ) {
-    $typeProps = $config->{ typeProps }->{ $type };
-    $filelist = join( ' ', @{ $filesForSourceCommands->{ $type } } );
-    @source_commands = @{ $typeProps->{ source_commands } || [] };
-    $doCommands = $typeProps->{ do_source_commands } || '';
+    my $typeProps = $config->{ typeProps }->{ $type };
+    my $filelist = join( ' ', @{ $filesForSourceCommands->{ $type } } );
+    my @source_commands = @{ $typeProps->{ source_commands } || [] };
+    my $envForSourceCommands = $typeProps->{ do_source_commands } || '';
 
-    # printLog(
-    #   "\$typeProps: $typeProps"
-    # , "\$filelist: $filelist"
-    # , '@source_commands: (' . join( $/, @source_commands ) . ')'
-    # , "\$doCommands: $doCommands"
-    #   );
+    my $doRunCommands = ( $envForSourceCommands eq $build
+                          or $envForSourceCommands eq $BUILD_TYPE_BOTH );
 
-    if(
-      $doCommands eq $build
-    or  $doCommands eq "both"
-    ){
-      $doCommands = TRUE;
-    } else {
-      $doCommands = FALSE;
-    }
-    if( $doCommands ){
-      foreach $command ( @source_commands ){
+    if( $doRunCommands ){
+      for my $command ( @source_commands ){
         my $replacementHashref = {
           scriptsPath => $Bin
-          , files       => $filelist
-          , root        => $root
+        , files       => $filelist
+        , root        => $root
         };
         $command = replaceVariables( $command, $replacementHashref );
 
-        printLog( "  trying: $command" );
+        printLog( "\ttrying: $command" );
         `$command`;
       }
     }
@@ -714,32 +697,6 @@ sub doSourceCommands {
 
   printLog( "ending source commands" );
 }
-
-# sub doProdCommands {
-#   printLog( "beginning production commands" );
-#   my ( $config, $workDir ) = @_;
-#   my $typeProps;
-#   my $doCommands;
-#   my $build = $config->{ buildType } || $BUILD_TYPE_PROD;
-#   my @commands;
-#   my $command;
-#   my $scriptPathVar = '{scriptsPath}';
-#   my $buildPathVar = '{buildPath}';
-
-#   if( $build ne $BUILD_TYPE_PROD ){
-#     return 0;
-#   }
-
-#   @commands = ( $config->{ prod }->{ commands } ) ? @{ $config->{ prod }->{ commands } } : ();
-#   foreach $command ( @commands ){
-#     $command =~ s/$scriptPathVar/$Bin/g;
-#     $command =~ s/buildPathVar/$workDir/g;
-#     printLog( "\ttrying: $command" );
-#     `$command`;
-#   }
-
-#   printLog( "ending production commands" );
-# }
 
 sub normalizeConfigurationValues {
 # Also validates.
