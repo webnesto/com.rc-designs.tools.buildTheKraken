@@ -41,7 +41,7 @@ use File::Spec;
 use FindBin qw( $Bin );
 use IO::File;
 use List::Util qw( first );
-use Utils qw( printLog extend extendNew from_json_file emptyDirOfType );
+use Utils qw( printLog extend extendNew from_json_file emptyDirOfType replaceVariables );
 
 use constant TRUE  => 1;
 use constant FALSE => '';
@@ -163,7 +163,7 @@ sub getFilenamesByType {
     my $ext = $typeProps->{ extension } or croak "No extension for filetype: $type";
     my @ignores = ( @{ $config->{ ignores } }, @{ $typeProps->{ ignores } } );
 
-    $filesForSourceCommands->{ $ext } = [];
+    $filesForSourceCommands->{ $type } = [];
 
     printLog( 'processing $ext' );
     defined $filesByTypeAndDir->{ $type } or $filesByTypeAndDir->{ $type } = {};
@@ -193,7 +193,7 @@ sub getFilenamesByType {
             if ( $absFile =~ /\.($ext)$/) {
               push( @{ $filesByTypeAndDir->{ $type }->{ $dir } }, $absFile );
               my $relFile = File::Spec->abs2rel( $absFile, $targetedSrcDir );
-              push( @{ $filesForSourceCommands->{ $ext } }, $relFile );
+              push( @{ $filesForSourceCommands->{ $type } }, $relFile );
               printLog( "\t\tfile: $_" );
             }
           }
@@ -240,17 +240,28 @@ sub parseProdContent {
       if( $ignoreInput ) {
         # We are inside an #ifdef block whose arg is NOT defined.
         # Ignore everything except the #endif.
-        next unless /$ENDIF_PATTERN/;
+        next unless( /$ENDIF_PATTERN/ || /$IFDEF_PATTERN/ );
+
+        if( /$IFDEF_PATTERN/ ) {
+          $ifdefCount++;
+        }
+        if( /$ENDIF_PATTERN/ ) {
+          if( $ifdefCount > 0 ) {
+            $ifdefCount--;
+          }
+          else {
+            carp "File \"$file\" is has too many #endif lines."
+          }
+        }
+        if( $ifdefCount == 0 ) {
+          $ignoreInput = FALSE;
+        }
+        else {
+          next;
+        }
       }
 
       if( /$ENDIF_PATTERN/ ) {
-        $ignoreInput = FALSE;
-        if( $ifdefCount > 0 ) {
-          $ifdefCount--;
-        }
-        else {
-          carp "File \"$file\" is has too many #endif lines."
-        }
         next;
       }
 
@@ -591,6 +602,7 @@ sub moveToTarget {
     my $ext = $typeProps->{ extension };
     my $ext_out = $typeProps->{ extension_out };
     my $buildFolder = $typeProps->{ build };
+    my @commands;
     if( $build eq $BUILD_TYPE_PROD ){
       @commands = ( $typeProps->{ production_commands } ) ? @{ $typeProps->{ production_commands } } : ();
     } else {
@@ -610,34 +622,42 @@ sub moveToTarget {
     -e $buildFolder or File::Path::make_path( $buildFolder ) or croak "Cannot make buildFolder \"$buildFolder\": $!";
 
     if( $doDeletes ){
-      printLog( "\temptying $buildFolder of $ext_out files" );
+      printLog( "\temptying $buildFolder of .$ext_out files" );
       emptyDirOfType( $buildFolder, $ext_out );
     }
 
-    foreach $filename ( keys %{ $filesByTypeAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
+    for my $filename ( keys %{ $filesByTypeAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
 
-      $file = File::Spec->catfile( $config->{ folders }->{ scratch }, "$filename.$ext_out" );
-      $minFile = File::Spec->catfile( $config->{folders}->{minimized}, "$filename.$ext_out" );
+      my $file = File::Spec->catfile( $config->{ folders }->{ scratch }, "$filename.$ext_out" );
+      my $minFile = File::Spec->catfile( $config->{folders}->{minimized}, "$filename.$ext_out" );
+      my $finalFile = File::Spec->catfile( $buildFolder, "$filename.$ext_out" );
+      my $sourceFile = $file;
+
       if( $build eq $BUILD_TYPE_PROD ) {
+        # This line accounts for the case where there are no production commands.
         copy( $file, $minFile ) or printLog( "Could not copy $file to $minFile: $!" );
-#        printLog( "running production commands on file: $file" );
+        printLog( "running production commands on file: $file" );
         foreach my $command ( @commands ){
           printLog( "rawcommand: $command" );
-          my $scriptPath = '{scriptsPath}';
-          my $infile = '{infile}';
-          my $outfile = '{outfile}';
-          $command =~ s/$scriptPath/$Bin/g;
-          $command =~ s/$infile/$minFile/g;
-          $command =~ s/$outfile/$minFile/g;
-          printLog( "trying $command" );
+          my $replacementHashref = {
+            scriptsPath => $Bin
+          , infile      => $file
+          , outfile     => $minFile
+          };
+          $command = replaceVariables( $command, $replacementHashref );
+
+          printLog( "prod - trying $command" );
           `$command`;
         }
-      } else {
-        copy( $file, $minFile ) or printLog( "Could not copy $file to $minFile: $!" );
+        $sourceFile = $minFile;
       }
+      
+      printLog( "sourceFile: $sourceFile" );
 
-      $finalFile = File::Spec->catfile( $buildFolder, "$filename.$ext_out" );
-      copy( $minFile, $finalFile ) or printLog( "Could not copy $minFile, to $finalFile: $!" );
+      unless( copy( $sourceFile, $finalFile ) ) {
+        printLog( "Could not copy $sourceFile, to $finalFile: $!" );
+        next;
+      }
 
       printLog("\tcreated $finalFile" );
     }
@@ -646,35 +666,29 @@ sub moveToTarget {
 
 sub doSourceCommands {
   printLog( "beginning source commands" );
-  my ( $config, $workDir, $filesForSourceCommands ) = @_;
+  my ( $config, $filesForSourceCommands ) = @_;
   my $root = $config->{ root };
   my $typeProps;
   my $doCommands;
   my $build = $config->{ buildType };
   my @files;
-  my $ext;
   my @source_commands;
   my $command;
   my $filelist;
 
-  my $scriptPath = '{scriptsPath}';
-  my $filesVar = '{files}';
-  my $rootVar = '{root}';
+  for my $type ( keys %{ $filesForSourceCommands } ) {
+    $typeProps = $config->{ typeProps }->{ $type };
+    $filelist = join( ' ', @{ $filesForSourceCommands->{ $type } } );
+    @source_commands = @{ $typeProps->{ source_commands } || [] };
+    $doCommands = $typeProps->{ do_source_commands } || '';
 
+    # printLog(
+    #   "\$typeProps: $typeProps"
+    # , "\$filelist: $filelist"
+    # , '@source_commands: (' . join( $/, @source_commands ) . ')'
+    # , "\$doCommands: $doCommands"
+    #   );
 
-  if( File::Spec->file_name_is_absolute( $root ) ){
-    $root = $root;
-  } else {
-    $root = File::Spec->catfile( $workDir, $root );
-    $root = Cwd::realpath( $root );
-  }
-
-  for $ext ( keys %{ $filesForSourceCommands } ) {
-    $typeProps = $config->{ typeProps }->{ $ext };
-    @files = @{ $filesForSourceCommands->{ $ext } };
-    $filelist = "@files";
-    @source_commands = ( $typeProps->{ source_commands } ) ? @{ $typeProps->{ source_commands } } : ();
-    $doCommands = $typeProps->{ do_source_commands } || "";
     if(
       $doCommands eq $build
     or  $doCommands eq "both"
@@ -685,10 +699,13 @@ sub doSourceCommands {
     }
     if( $doCommands ){
       foreach $command ( @source_commands ){
+        my $replacementHashref = {
+          scriptsPath => $Bin
+          , files       => $filelist
+          , root        => $root
+        };
+        $command = replaceVariables( $command, $replacementHashref );
 
-        $command =~ s/$scriptPath/$Bin/g;
-        $command =~ s/$filesVar/$filelist/g;
-        $command =~ s/$rootVar/$root/g;
         printLog( "  trying: $command" );
         `$command`;
       }
@@ -828,7 +845,7 @@ sub setUpResources {
     -w $scratchDir or croak "The scratch directory is not writable: $scratchDir";
 
     # And now its child directory, for minimized resources.
-    my $minDir = $config->{ folders }->{ minimized }
+    my $minDir = $config->{ folders }->{ minimized };
 
     unless( -e $minDir ) {
         mkdir $minDir, 0777 or croak "Cannot create minimized resources directory \"$minDir\": $!";
@@ -855,10 +872,10 @@ sub run {
 
   logStart();
 
-        # This is a composite of all the default and CLI-specified config files
+  # This is a composite of all the default and CLI-specified config files
   my $config = normalizeConfigurationValues( extendNew( getConfigs( @_ ) ) );
 
-        setUpResources( $config );
+  setUpResources( $config );
 
   #TODO: implement subs iteration - allow arguments for subs - default "current" directory.
 
@@ -870,7 +887,7 @@ sub run {
 
   cleanUpResources( $config );
 
-  doSourceCommands( $config, $config->{workDir}, $filesForSourceCommands );
+  doSourceCommands( $config, $filesForSourceCommands );
 
   logEnd( $config->{ buildType } );
 }
