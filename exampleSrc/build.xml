@@ -5,19 +5,19 @@
 
   <target name="[prod]">
     <exec executable="${perl}">
-      <arg line="${scripts}build.pl" />
+      <arg line="${krakenDir}/build.pl" />
       <arg line="${user.name}.json" />
     </exec>
   </target>
 
   <target name="[dev]">
     <exec executable="${perl}">
-      <arg line="${scripts}build.pl" />
+      <arg line="${krakenDir}/build.pl" />
       <arg line="${user.name}.json" />
       <arg line="-dev" />
     </exec>
     <exec executable="perl">
-      <arg line="${scripts}css31flavors.pl" />
+      <arg line="${krakenDir}/css31flavors.pl" />
       <arg line="${output.css}" />
     </exec>
   </target>
