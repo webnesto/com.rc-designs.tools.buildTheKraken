@@ -241,19 +241,6 @@ sub parseProdContent {
         # Ignore everything except the #endif.
         next unless( /$ENDIF_PATTERN/ || /$IFDEF_PATTERN/ );
 
-        if( /$ENDIF_PATTERN/ ) {
-          if( $ifdefCount > 0 ) {
-            $ifdefCount--;
-          }
-          else {
-          }
-        }
-        if( $ifdefCount == 0 ) {
-          $ignoreInput = FALSE;
-        }
-        else {
-          next;
-        }
       }
 
       if( /$ENDIF_PATTERN/ ) {
