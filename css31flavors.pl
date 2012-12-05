@@ -24,8 +24,9 @@
 #
 #  ***** END MIT LICENSE BLOCK *****
 
-#Includes
-use FindBin qw($Bin);
+use Carp;
+use Cwd;
+use FindBin qw();
 use lib "$FindBin::Bin/lib";
 
 use strict;
@@ -34,68 +35,77 @@ use warnings;
 use File::Basename;
 use File::Find;
 use File::Spec;
-use POSIX;
+use IO::File;
+use POSIX qw();
 use Utils qw( printLog );
+
+# Constants
+
+use constant {
+  MAX => 31
+};
+
+
+
+
+# Stuff happens after here.
 
 printLog(
   "++++++++++++++++"
-, "begin css31flavors: "
-.  POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
+, "begin css31flavors: " . POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
 );
 
-# determine targetFolder
-my $MAX = 31;
+# Where are we now?
+my $originalDir = Cwd::getcwd();
 
-my $targetDir;
-my @css_files;
-my $css_file;
-my @lines;
-my @imports;
-my $imports;
-my $import;
-my $line;
-my $import_count;
-my $file_count;
-my $filename;
-my $subfile;
-my $tmpfile;
+# Where are we going to do stuff?
+my $targetDir = Cwd::abs_path( shift || '.' );
 
-if (@ARGV){
-  if( File::Spec->file_name_is_absolute( $ARGV[0] ) ){
-    $targetDir = File::Spec->canonpath( $ARGV[0] );
-    printLog( "css file path is absolute." );
-  } else {
-    $targetDir = File::Spec->catfile( getcwd, $ARGV[0] );
-    printLog( "css file path is relative." );
-  }
-} else {
-  $targetDir = getcwd;
-}
 printLog( "target directory is $targetDir" );
 
-sub startSubfile {
-  my (
-    $subfile
-  , $targetDir
-  , $filename
-  , $file_count
-  ) = @_;
+# Set up list storage for CSS filenames.
+my @cssFilePaths;
 
-  $subfile = File::Spec->catfile( $targetDir,  "$filename"."_"."$file_count.css" );
-  printLog( "sub file: $subfile" );
-  open FILEPART, ">$subfile";
-  print TMPFILE "\@import \"$filename"."_"."$file_count.css\";\n";
-}
+# Define a subroutine reference for doing something with CSS files.
+my $cssFilePathSnarfer = getWantedSub( qr/\.css$/, \@cssFilePaths );
 
-sub wanted {
-  if( $_ =~ /\.css$/ ){
-    push(@css_files, $File::Find::name );
+# Go to the target directory.
+#chdir $targetDir;
+
+# Populate @cssFilePaths.
+find( $cssFilePathSnarfer, $targetDir );
+
+for my $path ( @cssFilePaths ) {
+
+  printLog( "full path : $path" );
+
+  my( $filename, $directories, $suffix ) = fileparse( $path, qr/\Q.css\E/ );
+  
+  printLog(
+    "basename  : $basename"
+  , "directory : $directories"
+  , "suffix    : $suffix"
+    );
+
+  my $fh = new IO::File $path, 'r';
+  unless( defined $fh ) {
+    carp "Unable to open '$path' for reading. Skipping.";
+    next;
   }
+
+  my @lines = <$fh>;
+  my @imports = grep { /^\@import/ } @lines;
+
+  printLog( "Import count: ". scalar @imports  );
+
+  if( scalar @imports > MAX ) {
+    printLog( ( scalar @imports ) . " > " . MAX . ': Creating subsets' );
+  }
+
 }
 
-chdir $targetDir;
-#@css_files = glob "*.css";
-find( \&wanted, "." );
+exit 0;
+
 
 foreach $css_file (@css_files) {
   printLog( "file: $css_file" );
@@ -104,11 +114,11 @@ foreach $css_file (@css_files) {
   printLog( "filename is: $filename" );
 
   open FILE, "<$css_file";
-  @lines = <FILE>;
+  my @lines = <FILE>;
   @imports = ();
 
   foreach $line (@lines){
-    if( $line =~ /^\@import.*/ ){
+    if( $line =~ /^\@import/ ){
       push( @imports, $line );
     }
   }
@@ -166,3 +176,18 @@ printLog(
 .  POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
 , "++++++++++++++++"
 );
+
+sub startSubfile {
+  my (
+    $subfile
+  , $targetDir
+  , $filename
+  , $file_count
+  ) = @_;
+
+  $subfile = File::Spec->catfile( $targetDir,  "$filename"."_"."$file_count.css" );
+  printLog( "sub file: $subfile" );
+  open FILEPART, ">$subfile";
+  print TMPFILE "\@import \"$filename"."_"."$file_count.css\";\n";
+}
+
