@@ -11,12 +11,25 @@ The core of the system is a Perl script and modules.  The minimum required versi
 
 While the Perl can be run directly, an `exampleSrc` directory is provided with an Ant build file to make running the scripts easier and to provide an example of the scripts use in a build process.
 
-Here is a quick overview of the two scripts:
+Requirements
+------------
 
-build.pl
---------
+A Unix-like environment with Perl 5.000 or greater.  It has been developed and tested under [Cygwin](http://www.cygwin.com) and GNU/Linux running the 3.2.0 kernel.
+
+Installation
+------------
+
+Just drop the contents of this repo anywhere you like.  If you're calling the scripts from Ant, be sure to set `krakenDir` in your project directory's `build.properties` file to your `/path/to/com.rc-designs.tools.buildthekraken`.
 
 
 
-css31flavors.pl
----------------
+The scripts
+-----------
+
+### build.pl
+
+
+
+
+### css31flavors.pl
+
