@@ -1,28 +1,28 @@
 #!/usr/bin/perl -w
 
-#	***** BEGIN MIT LICENSE BLOCK *****
+#  ***** BEGIN MIT LICENSE BLOCK *****
 #
-#	Copyright (c) 2011 B. Ernesto Johnson
+#  Copyright (c) 2011 B. Ernesto Johnson
 #
-#	Permission is hereby granted, free of charge, to any person obtaining a copy
-#	of this software and associated documentation files (the "Software"), to deal
-#	in the Software without restriction, including without limitation the rights
-#	to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-#	copies of the Software, and to permit persons to whom the Software is
-#	furnished to do so, subject to the following conditions:
+#  Permission is hereby granted, free of charge, to any person obtaining a copy
+#  of this software and associated documentation files (the "Software"), to deal
+#  in the Software without restriction, including without limitation the rights
+#  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+#  copies of the Software, and to permit persons to whom the Software is
+#  furnished to do so, subject to the following conditions:
 #
-#	The above copyright notice and this permission notice shall be included in
-#	all copies or substantial portions of the Software.
+#  The above copyright notice and this permission notice shall be included in
+#  all copies or substantial portions of the Software.
 #
-#	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-#	IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-#	FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-#	AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-#	LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-#	OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-#	THE SOFTWARE.
+#  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+#  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+#  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+#  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+#  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+#  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+#  THE SOFTWARE.
 #
-#	***** END MIT LICENSE BLOCK *****
+#  ***** END MIT LICENSE BLOCK *****
 
 #Includes
 use FindBin qw($Bin);
@@ -38,9 +38,9 @@ use POSIX;
 use Utils qw( printLog );
 
 printLog(
-	"++++++++++++++++"
-,	"begin css31flavors: "
-.	POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
+  "++++++++++++++++"
+, "begin css31flavors: "
+.  POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
 );
 
 # determine targetFolder
@@ -61,36 +61,36 @@ my $subfile;
 my $tmpfile;
 
 if (@ARGV){
-	if( File::Spec->file_name_is_absolute( $ARGV[0] ) ){
-		$targetDir = File::Spec->canonpath( $ARGV[0] );
-		printLog( "css file path is absolute." );
-	} else {
-		$targetDir = File::Spec->catfile( getcwd, $ARGV[0] );
-		printLog( "css file path is relative." );
-	}
+  if( File::Spec->file_name_is_absolute( $ARGV[0] ) ){
+    $targetDir = File::Spec->canonpath( $ARGV[0] );
+    printLog( "css file path is absolute." );
+  } else {
+    $targetDir = File::Spec->catfile( getcwd, $ARGV[0] );
+    printLog( "css file path is relative." );
+  }
 } else {
-	$targetDir = getcwd;
+  $targetDir = getcwd;
 }
 printLog( "target directory is $targetDir" );
 
 sub startSubfile {
-	my (
-		$subfile
-	,	$targetDir
-	,	$filename
-	,	$file_count
-	) = @_;
+  my (
+    $subfile
+  , $targetDir
+  , $filename
+  , $file_count
+  ) = @_;
 
-	$subfile = File::Spec->catfile( $targetDir,  "$filename"."_"."$file_count.css" );
-	printLog( "sub file: $subfile" );
-	open FILEPART, ">$subfile";
-	print TMPFILE "\@import \"$filename"."_"."$file_count.css\";\n";
+  $subfile = File::Spec->catfile( $targetDir,  "$filename"."_"."$file_count.css" );
+  printLog( "sub file: $subfile" );
+  open FILEPART, ">$subfile";
+  print TMPFILE "\@import \"$filename"."_"."$file_count.css\";\n";
 }
 
 sub wanted {
-	if( $_ =~ /\.css$/ ){
-		push(@css_files, $File::Find::name );
-	}
+  if( $_ =~ /\.css$/ ){
+    push(@css_files, $File::Find::name );
+  }
 }
 
 chdir $targetDir;
@@ -98,71 +98,71 @@ chdir $targetDir;
 find( \&wanted, "." );
 
 foreach $css_file (@css_files) {
-	printLog( "file: $css_file" );
-	my($filename, $directories, $suffix) = fileparse($css_file, qr/\Q.css\E/);
+  printLog( "file: $css_file" );
+  my($filename, $directories, $suffix) = fileparse($css_file, qr/\Q.css\E/);
 
-	printLog( "filename is: $filename" );
+  printLog( "filename is: $filename" );
 
-	open FILE, "<$css_file";
-	@lines = <FILE>;
-	@imports = ();
+  open FILE, "<$css_file";
+  @lines = <FILE>;
+  @imports = ();
 
-	foreach $line (@lines){
-		if( $line =~ /^\@import.*/ ){
-			push( @imports, $line );
-		}
-	}
+  foreach $line (@lines){
+    if( $line =~ /^\@import.*/ ){
+      push( @imports, $line );
+    }
+  }
 
-	$imports = @imports;
+  $imports = @imports;
 
-	printLog( "has this many imports: $imports" );
+  printLog( "has this many imports: $imports" );
 
-	if( $imports > $MAX ){
-		printLog( "creating subsets" );
-		$import_count = 0;
-		$file_count = 0;
+  if( $imports > $MAX ){
+    printLog( "creating subsets" );
+    $import_count = 0;
+    $file_count = 0;
 
-		$tmpfile = File::Spec->catfile( $targetDir,  "$filename.tmp.css" );
-		open TMPFILE, ">$tmpfile";
+    $tmpfile = File::Spec->catfile( $targetDir,  "$filename.tmp.css" );
+    open TMPFILE, ">$tmpfile";
 
-		&startSubfile(
-			$subfile
-		,	$targetDir
-		,	$filename
-		, $file_count
-		);
+    &startSubfile(
+      $subfile
+    , $targetDir
+    , $filename
+    , $file_count
+    );
 
-		foreach $import  (@imports) {
-			print FILEPART $import;
-			$import_count = $import_count + 1;
-			if( $import_count == $MAX ){
-				$import_count = 0;
-				close FILEPART;
-				$file_count = $file_count + 1;
-				&startSubfile(
-					$subfile
-				,	$targetDir
-				,	$filename
-				, $file_count
-				);
-			}
-		}
+    foreach $import  (@imports) {
+      print FILEPART $import;
+      $import_count = $import_count + 1;
+      if( $import_count == $MAX ){
+        $import_count = 0;
+        close FILEPART;
+        $file_count = $file_count + 1;
+        &startSubfile(
+          $subfile
+        , $targetDir
+        , $filename
+        , $file_count
+        );
+      }
+    }
 
-		close FILEPART;
-		close TMPFILE;
-	} else {
-		$tmpfile = 0;
-	}
+    close FILEPART;
+    close TMPFILE;
+  } else {
+    $tmpfile = 0;
+  }
 
 
-	close FILE;
-	if( $tmpfile ){
-		rename $tmpfile, $css_file;
-	}
+  close FILE;
+  if( $tmpfile ){
+    rename $tmpfile, $css_file;
+  }
 }
 
 printLog(
-	"end css31flavors:"
-.	POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
-,	"++++++++++++++++"
+  "end css31flavors:"
+.  POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
+, "++++++++++++++++"
 );
