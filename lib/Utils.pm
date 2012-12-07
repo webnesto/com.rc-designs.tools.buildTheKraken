@@ -55,8 +55,10 @@ sub indexOf {
 
 
 sub printLog {
-#  print POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime).":\n";
-  print " $_$/" for @_;
+  local $, = $/; # Used to join elements in @_.
+  local $\ = $/; # Used at the end of the print.
+
+  print @_;
 }
 
 sub extend {
