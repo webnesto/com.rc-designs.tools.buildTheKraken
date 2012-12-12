@@ -2,7 +2,7 @@
 // Use "/" for file paths.  If not, "\" must be escaped (NOTE: will work in Windows either way);
 // TODO: when documenting use - be sure to indicate that any array properties are completely overrwritten when specified in additional build files.
 {
-  "buildType": "prod"                     // "prod" build type - only valid values are "prod" and "dev"
+  "buildEnv": "prod"                     // "prod" build environment - only valid values are "prod" and "dev"
 , "root": ""                              // default's to working directory
 , "importroot": "."                       // relative to root
 // NOTE: "subs" not yet implemented
@@ -24,9 +24,7 @@
     "Javascript": {
       "extension": "js"
 //    , "extension_out": "jcrazy"         // Optional - different extension for generated file(s)
-//    , "extension_out_dev": "jcrazier"   // Optional - different extension for use in "dev_include" paths ( and imports)
     , "block_comment": "/*! -CONTENT- */"
-    , "dev_include": "document.write('<scr'+'ipt type=\"text/javascript\" src=\"-CONTENT-\"></scr'+'ipt>')"
     , "ignores": [                        // Foldernames to ignore
 //        "folderName"                    // Example - ignores folder named "folderName"
       ]
@@ -41,20 +39,27 @@
     , "build": ""                         // Relative to root.  If any value,  root/[value]/[folders.build]/ will be used instead of root/[extension]/[folders.build]/
     , "prepend": ""                       // will prepend all content - good for wrapper functions
     , "postpend": ""                      // will finish content - good for closing wrapper functions
-    , "production_commands" : [           // commands run once for each "built" files in a production build.  Available variables "${scriptsPath}", "${infile}", "${outfile}"
-        "java  -jar \"${scriptsPath}/ext/yuicompressor-2.4.2.jar\" ${infile} -o ${outfile}  --line-break 1000" // -v"
-      ]
-    , "development_commands" : [          // will be run once for each "built" files in a development build.  Available variables "${scriptsPath}", "${infile}", "${outfile}"
-      ]
-    , "source_commands" : [               // will be run once (TODO: dev/prod tbd) - passed a space separated list of all source files in variable ${files} position.
-        "java  -jar  \"${scriptsPath}/ext/jsdoc-toolkit/jsrun.jar\" \"${scriptsPath}/ext/jsdoc-toolkit/app/run.js\" -a -r=10 -d=${root}/../docs/js -t=${scriptsPath}/ext/jsdoc-toolkit/templates/jsdoc ${files}"
-      ]
-    , "do_source_commands": "prod"        // possible values are "dev", "prod", "both", "none"
+    , "env": {
+        "prod": {                         // commands run once for each "built" file when the build environment matches this key.  Available variables "${scriptsPath}", "${infile}", "${outfile}"
+          "commands": [
+            "java  -jar \"${scriptsPath}/ext/yuicompressor-2.4.2.jar\" ${infile} -o ${outfile}  --line-break 1000" // -v"
+          ]
+        , "postProcessingCommands": [     // Will be run once.  Passed a space separated list of all source files in variable ${files} position.
+            "java  -jar  \"${scriptsPath}/ext/jsdoc-toolkit/jsrun.jar\" \"${scriptsPath}/ext/jsdoc-toolkit/app/run.js\" -a -r=10 -d=${root}/../docs/js -t=${scriptsPath}/ext/jsdoc-toolkit/templates/jsdoc ${files}"
+          ]
+        }
+      , "dev": {
+          "commands": [
+            // None for dev.
+          ]
+//      , "extension_out": ""           // Optional - different extension for use in this build environment.
+        , "includeString": "document.write('<scr'+'ipt type=\"text/javascript\" src=\"-CONTENT-\"></scr'+'ipt>')"
+        }
+      }
     }
   , "CSS": {
       "extension": "css"
     , "block_comment": "/*! -CONTENT- */"
-    , "dev_include": "@import \"-CONTENT-\";"
     , "ignores": []
     , "firsts": []
     , "lasts": []
@@ -62,15 +67,27 @@
     , "build": ""
     , "prepend": ""
     , "postpend": ""
-    , "production_commands" : [
-        "java  -jar \"${scriptsPath}/ext/yuicompressor-2.4.2.jar\" ${infile} -o ${outfile}  --line-break 1000 " //-v"
-      ]
+    , "env": {
+        "prod": {                         // commands run once for each "built" file when the build environment matches this key.  Available variables "${scriptsPath}", "${infile}", "${outfile}"
+          "commands": [
+            "java  -jar \"${scriptsPath}/ext/yuicompressor-2.4.2.jar\" ${infile} -o ${outfile}  --line-break 1000 " //-v"
+          ]
+        , "postProcessingCommands": [     // Will be run once.  Passed a space separated list of all source files in variable ${files} position.
+            // None for prod.
+          ]
+        }
+      , "dev": {
+          "commands": [
+            // None for dev.
+          ]
+        , "includeString": "@import \"-CONTENT-\";"
+        }
+      }
     }
   , "LESS CSS": {
       "extension": "less"
     , "extension_out": "css"
     , "block_comment": "/* -CONTENT- */"
-    , "dev_include": "@import \"-CONTENT-\";"
     , "ignores": []
     , "firsts": []
     , "lasts": []
@@ -78,15 +95,27 @@
     , "build": "css/bin"
     , "prepend": ""
     , "postpend": ""
-    , "production_commands" : [
-        "java -jar \"${scriptsPath}/ext/rhino/js.jar\" \"${scriptsPath}/ext/less-rhino-1.1.5.js\" ${infile} ${outfile}"
-      , "java -jar \"${scriptsPath}/ext/yuicompressor-2.4.2.jar\" ${infile} -o ${outfile}  --line-break 1000 " //-v"
-      ]
+    , "env": {
+        "prod": {                         // commands run once for each "built" file when the build environment matches this key.  Available variables "${scriptsPath}", "${infile}", "${outfile}"
+          "commands": [
+            "java -jar \"${scriptsPath}/ext/rhino/js.jar\" \"${scriptsPath}/ext/less-rhino-1.1.5.js\" ${infile} ${outfile}"
+          , "java -jar \"${scriptsPath}/ext/yuicompressor-2.4.2.jar\" ${infile} -o ${outfile}  --line-break 1000 " //-v"
+          ]
+        , "postProcessingCommands": [     // Will be run once.  Passed a space separated list of all source files in variable ${files} position.
+            "java  -jar  \"${scriptsPath}/ext/jsdoc-toolkit/jsrun.jar\" \"${scriptsPath}/ext/jsdoc-toolkit/app/run.js\" -a -r=10 -d=${root}/../docs/js -t=${scriptsPath}/ext/jsdoc-toolkit/templates/jsdoc ${files}"
+          ]
+        }
+      , "dev": {
+          "commands": [
+            // None for dev.
+          ]
+        , "includeString": "@import \"-CONTENT-\";"
+        }
+      }
     }
   , "HTML": {
       "extension": "html"
     , "block_comment": "<!-- -CONTENT- -->"
-    , "dev_include": "<!--#include virtual=\"-CONTENT-\" -->"
     , "ignores": []
     , "firsts": []
     , "lasts": []
@@ -94,17 +123,27 @@
     , "build": ""
     , "prepend": ""
     , "postpend": ""
+    , "env": {
+        "dev": {
+          "includeString": "<!--#include virtual=\"-CONTENT-\" -->"
+        }
+      }
     }
   }
-, "prod": {              // Only used in production builds
-     "package": "false"
-  , "keep": [            // Variables for use in preprocessing - keys included will be kept
-//    , "debug"          // Example - This would ensure that all code enclosed in #ifdef debug -> #endif blocks will be included (unless innerblock disables)
-//    , "debugInner"     // Example - This would ensure that all code encolsed in #ifdef debugInner -> #endif blocks will be included (unless innerblock disables)
-//    , "etc"            // Example - And so on
-    ]
-  }
-, "dev": {
-    "url": ""            // Prepended to all paths in dev build - No trailing slashes
+, "env": {
+
+    "prod": {              // Only used in production builds
+      "definedArgs": [            // Variables for use in preprocessing - keys included will be kept
+//      , "debug"          // Example - This would ensure that all code enclosed in #ifdef debug -> #endif blocks will be included (unless innerblock disables)
+//      , "debugInner"     // Example - This would ensure that all code encolsed in #ifdef debugInner -> #endif blocks will be included (unless innerblock disables)
+//      , "etc"            // Example - And so on
+      ]
+      , "processIfdefs": "true"
+      , "flattenImports": "true"
+    }
+  , "dev": {
+      "prependToPath": ""            // Prepended to all paths in dev build - No trailing slashes
+    }
+
   }
 }

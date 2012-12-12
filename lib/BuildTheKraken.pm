@@ -49,9 +49,9 @@ use constant FALSE => '';
 #Variables
 
 my $DEFAULT_CONFIG_FILE  = 'build.json';
-my $BUILD_TYPE_DEV       = 'dev';
-my $BUILD_TYPE_PROD      = 'prod';
-my $BUILD_TYPE_BOTH      = 'both';
+my $BUILD_ENV_DEV       = 'dev';
+my $BUILD_ENV_PROD      = 'prod';
+my $BUILD_ENV_BOTH      = 'both';
 my $WARNING_MESSAGE      = 'GENERATED FILE - DO NOT EDIT';
 my $MIN_DIR              = 'min';
 my $SCRATCH_DIR          = "tmp";
@@ -112,14 +112,16 @@ sub getConfigPath {
 sub getConfigs {
 # Expects a list of config file paths, either absolute or relative to the working directory.
 #
-# The string '-dev' may be passed as any of the arguments to add { 'buildType' => 'dev' } to the
-# returned list of hash references containing configuration data.
+# Arbitrary configuration values may be passed on the command-line using the format:
+#  -D{configKey}={configValue}
+#
+# Currently, only top-level keys are supported.
 #
 # Order is important.  Values for duplicate configuration keys override earlier ones.  So the
 # values for duplicate configuration keys, if any, in the working directory configuration
 # override those in the script directory.  And configuration file paths at the end of the
 # command-line will have precedence over earlier paths, while the entire set of passed arguments
-# has precedence over the two defaults.
+# has precedence over the two defaults, with later arguments taking precedence.
 
   my @configs = (
     from_json_file( File::Spec->catfile( $Bin, $DEFAULT_CONFIG_FILE ) )
@@ -129,9 +131,11 @@ sub getConfigs {
 
   my $argConfig = {};
   for my $arg ( @_ ){
-    if( $arg eq "-dev" ){  # Arguments override any config files
-      $argConfig->{ buildType } = $BUILD_TYPE_DEV;
-    } else {
+    if( $arg =~ m,^-D([^=]+)=(.+)$, ) {
+      printLog("config argument passed: '$1' = '$2'" );
+      $argConfig->{ $1 } = $2;
+    }
+    else {
       printLog("config file passed as arg: $arg" );
       push( @configs, from_json_file( getConfigPath( $arg ) ) );
     }
@@ -166,11 +170,11 @@ sub getFilenamesByType {
 
     $filesForSourceCommands->{ $type } = [];
 
-    printLog( 'processing $ext' );
+    printLog( "processing $ext" );
     defined $filesByTypeAndDir->{ $type } or $filesByTypeAndDir->{ $type } = {};
 
     # If $typeProps->{folder} is defined, look in that subdirectory of the $config->{workDir}.
-    # Otherwise, look in the $config->{workDir}.
+    # Otherwise, look in the $config>{workDir}.
     my $targetedSrcDir = ( defined $typeProps->{folder} ) ?
         File::Spec->catdir( $config->{workDir}, $typeProps->{folder} ) :
         $config->{workDir};
@@ -302,6 +306,9 @@ sub parseProdContent {
 sub parseDevContent {
   my ( $file, $typeProps, $config ) = @_;
 
+  my $buildEnv = $config->{ buildEnv };
+  my $prependToPath = $config->{ env }->{ $buildEnv }->{ prependToPath };
+
   my $content = '';
 
   if( -e $file ) {
@@ -314,21 +321,29 @@ sub parseDevContent {
       if( /$IMPORT_PATTERN/ ) {
         my $relImportPath = $1;
 
-        if( defined $config->{ dev }->{ url } ) {
-          $relImportPath = File::Spec->catfile( $config->{ dev }->{ url }, $relImportPath );
+        my $includeString = $typeProps->{ env }->{ $buildEnv }->{ includeString };
+        if( defined $includeString ) {
+          $relImportPath = replaceExtension( $relImportPath, $typeProps->{ env }->{ $buildEnv }->{ extension_out } );
+
+          if( defined $prependToPath ) {
+            $relImportPath = File::Spec->catfile( $prependToPath, $relImportPath );
+          }
+
+          $includeString =~ s/$REPLACE_PATTERN/$relImportPath/;
+
         }
-        $relImportPath = replaceExtension( $relImportPath, $typeProps->{ extension_out_dev } );
 
         my $absImportPath = File::Spec->catfile( $config->{ importroot }, $relImportPath );
 
-        my $includeString = $typeProps->{ dev_include };
-        $includeString =~ s/$REPLACE_PATTERN/$relImportPath/;
-
-        printLog( "\tdev - importing: $includeString" );
+        printLog( "\tdev - parsing file: $absImportPath" );
 
         $content .= parseDevContent( $absImportPath, $typeProps, $config );
         
-        $content .= $includeString . $/;
+        printLog( "\tdev - writing includeString: $includeString" );
+
+        if( defined $includeString ) {
+          $content .= $includeString . $/;
+        }
       }
     }
 
@@ -338,7 +353,7 @@ sub parseDevContent {
   return $content;
 }
 
-sub replaceExtension{
+sub replaceExtension {
   my ( $path, $ext ) = @_;
   if( $ext ){
     $path =~ s,[^.]+$,$ext,;
@@ -519,20 +534,19 @@ sub makeFiles {
 
   my ( $config, $filesByTypeAndDir ) = @_;
 
-  my $build = $config->{ buildType };
-  my $keepers = $config->{ prod }->{ keep };
+  my $buildEnv = $config->{ buildEnv };
+  my $definedArgs = $config->{ env }->{ $buildEnv }->{ definedArgs };
 
-  for my $type ( keys %{ $filesByTypeAndDir } ) {
+  for my $type ( keys %{$filesByTypeAndDir} ) {
     my $typeProps = $config->{ typeProps }->{ $type };
     my $ext = $typeProps->{ extension };
     my $ext_out = $typeProps->{ extension_out };
     my $ext_build = ( $typeProps->{ build } ) ? $typeProps->{ build } : $ext;
-    my $extension_out_dev = $typeProps->{ extension_out_dev };
+    my $extension_out_for_env = $typeProps->{ env }->{ $buildEnv }->{ extension_out };
     
     my $blockComment = $typeProps->{ block_comment };
     $blockComment =~ s/$REPLACE_PATTERN/$WARNING_MESSAGE/;
     
-    my $includeString = $typeProps->{dev_include};
     my $outputPath = File::Spec->catdir( $config->{root}, $ext_build, $config->{ folders }->{ build } );
 
     # Nomenclature note: Each directory in the source-tree becomes a file in the output-tree.
@@ -558,27 +572,35 @@ sub makeFiles {
 
         printLog( "\tadding $fromFile" );
 
-        if ( $config->{ buildType } eq $BUILD_TYPE_PROD ) {
-          my $tmpFile = parseProdContent( $fromFile, $keepers, $config->{ importroot } );
+        if ( $config->{ buildEnv } eq $BUILD_ENV_PROD ) {
+          my $tmpFile = parseProdContent( $fromFile, $definedArgs, $config->{ importroot } );
           $fh->print( $tmpFile ) if $tmpFile;
         }
-        elsif ( $config->{ buildType } eq $BUILD_TYPE_DEV ) {
+        elsif ( $config->{ buildEnv } eq $BUILD_ENV_DEV ) {
+          printLog( "\tdev - parsing top-level file: $fromFile" );
           my $tmpFile = parseDevContent( $fromFile, $typeProps, $config );
           $fh->print( $tmpFile ) if $tmpFile;
 
-          # Get the path to the source file, relative to the configured "root" directory.
-          my $relPath = File::Spec->abs2rel( $fromFile, $config->{root} );
-          $relPath = replaceExtension( $relPath, $extension_out_dev ); # If $extension_out_dev is undefined, does nothing.
+          my $includeString = $typeProps->{ env }->{ $buildEnv }->{ includeString };
+          if( defined $includeString ) {
 
-          if( defined $config->{dev}->{url} ) {
-            $relPath = File::Spec->catfile( $config->{dev}->{url}, $relPath );
+            # Get the path to the source file, relative to the configured "root" directory.
+            my $relPath = File::Spec->abs2rel( $fromFile, $config->{root} );
+            $relPath = replaceExtension( $relPath, $extension_out_for_env ); # If $extension_out_for_env is undefined, does nothing.
+
+            # Prepend something to the path, if configured.
+            my $prependToPath = $config->{ env }->{ $buildEnv }->{ prependToPath };
+            if( defined $prependToPath ) {
+              $relPath = File::Spec->catfile( $prependToPath, $relPath );
+            }
+
+            # Set the relative path in the include string.
+            $includeString =~ s/$REPLACE_PATTERN/$relPath/;
+
+            printLog( "\tdev - writing top-level includeString: $includeString" );
+
+            $fh->print( $includeString . $/ );
           }
-
-          my $includeString = $typeProps->{dev_include};
-          $includeString =~ s/$REPLACE_PATTERN/$relPath/;
-
-          printLog( "\tdev - including: $includeString" );
-          $fh->print( $includeString . $/ );
         }
 
       }
@@ -594,7 +616,7 @@ sub makeFiles {
 sub moveToTarget {
   my ( $config, $filesByTypeAndDir ) = @_;
   my $bin = $config->{ folders }->{ build };
-  my $build = $config->{ buildType };
+  my $buildEnv = $config->{ buildEnv };
   my $root = $config->{ root };
   my $doDeletes = $config->{ doDeletes };
 
@@ -603,12 +625,9 @@ sub moveToTarget {
     my $ext = $typeProps->{ extension };
     my $ext_out = $typeProps->{ extension_out };
     my $buildFolder = $typeProps->{ build };
-    my @commands;
-    if( $build eq $BUILD_TYPE_PROD ){
-      @commands = ( $typeProps->{ production_commands } ) ? @{ $typeProps->{ production_commands } } : ();
-    } else {
-      @commands = ( $typeProps->{ development_commands } ) ? @{ $typeProps->{ development_commands } } : ();
-    }
+
+    my $commandsArrayRef = $typeProps->{ env }->{ $buildEnv }->{ commands };
+    my @commands = ( $commandsArrayRef ) ? @{$commandsArrayRef} : ();
 
     # If $buildFolder is blank...
     if( ! defined $buildFolder || $buildFolder eq '' ) {
@@ -634,7 +653,7 @@ sub moveToTarget {
       my $finalFile = File::Spec->catfile( $buildFolder, "$filename.$ext_out" );
       my $sourceFile = $file;
 
-      if( $build eq $BUILD_TYPE_PROD ) {
+      if( $buildEnv eq $BUILD_ENV_PROD ) {
         # This line accounts for the case where there are no production commands.
         copy( $file, $minFile ) or printLog( "Could not copy $file to $minFile: $!" );
         printLog( "running production commands on file: $file" );
@@ -653,7 +672,7 @@ sub moveToTarget {
         $sourceFile = $minFile;
       }
       
-      printLog( "sourceFile: $sourceFile" );
+#      printLog( "sourceFile: $sourceFile" );
 
       unless( copy( $sourceFile, $finalFile ) ) {
         printLog( "Could not copy $sourceFile, to $finalFile: $!" );
@@ -669,7 +688,7 @@ sub doSourceCommands {
   printLog( "beginning source commands" );
   my ( $config, $filesForSourceCommands ) = @_;
   my $root = $config->{ root };
-  my $build = $config->{ buildType };
+  my $buildEnv = $config->{ buildEnv };
 
   for my $type ( keys %{ $filesForSourceCommands } ) {
     my $typeProps = $config->{ typeProps }->{ $type };
@@ -677,8 +696,8 @@ sub doSourceCommands {
     my @source_commands = @{ $typeProps->{ source_commands } || [] };
     my $envForSourceCommands = $typeProps->{ do_source_commands } || '';
 
-    my $doRunCommands = ( $envForSourceCommands eq $build
-                          or $envForSourceCommands eq $BUILD_TYPE_BOTH );
+    my $doRunCommands = ( $envForSourceCommands eq $buildEnv
+                          or $envForSourceCommands eq $BUILD_ENV_BOTH );
 
     if( $doRunCommands ){
       for my $command ( @source_commands ){
@@ -747,10 +766,14 @@ sub normalizeConfigurationValues {
       croak 'Missing or invalid extensions configured for types: ' . join( ', ', @badTypes );
     }
 
-
-    # The only valid values are 'prod' ($BUILD_TYPE_PROD) and 'dev' ($BUILD_TYPE_DEV).
-    # If the provided value is not $BUILD_TYPE_DEV, we coerce it to $BUILD_TYPE_PROD.
-    $config->{ buildType } eq $BUILD_TYPE_DEV or $config->{ buildType } = $BUILD_TYPE_PROD;
+    # Check the validity of the build enviroment setting.  It must be one of the keys
+    # of the "env" hash at the top level of the config tree.  In the default configuration
+    # file, the values are "prod" and "dev".
+    my @validEnvironments = keys %{ $config->{ env } };
+    my $buildEnv = $config->{ buildEnv };
+    unless( grep { /$buildEnv/ } @validEnvironments ) {
+      croak "Build environment value '$buildEnv' not found in environment list: '" . join( "', '", @validEnvironments ) . "'";
+    }
 
     # $config->{importroot} is relative to $config->{root}.
     # So cat them before canonicalizing it below.
@@ -773,15 +796,17 @@ sub normalizeConfigurationValues {
     # And define a minimized-resources directory path.
     $config->{ folders }->{ minimized } = File::Spec->catdir( $config->{ folders }->{ scratch }, $MIN_DIR );
 
-
-    if( defined $config->{dev}->{url} ) {
-      # Trim it.
-      $config->{dev}->{url} =~ s,$TRIMMABLE_WHITESPACE,,g;
-      if( $config->{dev}->{url} eq '' ) {
-        undef $config->{dev}->{url};
+    # Iterate over the available environments.
+    for my $envKey ( keys %{ $config->{env} } ) {
+      my $envConfig = $config->{ env }->{ $envKey } || {};
+      # Trim the prependToPath value.
+      if( defined $envConfig->{ prependToPath } ) {
+        $envConfig->{ prependToPath } =~ s,$TRIMMABLE_WHITESPACE,,g;
+        if( $envConfig->{ prependToPath } eq '' ) {
+          delete $envConfig->{ prependToPath };
+        }
       }
     }
-    
 
     return $config;
 }
@@ -846,7 +871,7 @@ sub run {
 
   doSourceCommands( $config, $filesForSourceCommands );
 
-  logEnd( $config->{ buildType } );
+  logEnd( $config->{ buildEnv } );
 }
 
 1;
