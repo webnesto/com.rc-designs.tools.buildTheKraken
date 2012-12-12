@@ -115,7 +115,15 @@ sub getConfigs {
 # Arbitrary configuration values may be passed on the command-line using the format:
 #  -D{configKey}={configValue}
 #
-# Currently, only top-level keys are supported.
+# Nested keys are addressed using dot-notation.  For example you could override the
+# "LESS CSS" build directory with this argument:
+#  "-DtypeProps.LESS CSS.build=other-css/bin"
+#
+# Note the quoting for the embedded space.
+#
+# The first key-part, after "-D" and before the first dot, is always treated as a hash key.
+# Subsequent key-parts are also treated as hash keys, unless they are non-negative integers,
+# in which case they are treated as array indices.
 #
 # Order is important.  Values for duplicate configuration keys override earlier ones.  So the
 # values for duplicate configuration keys, if any, in the working directory configuration
@@ -123,25 +131,59 @@ sub getConfigs {
 # command-line will have precedence over earlier paths, while the entire set of passed arguments
 # has precedence over the two defaults, with later arguments taking precedence.
 
+
   my @configs = (
     from_json_file( File::Spec->catfile( $Bin, $DEFAULT_CONFIG_FILE ) )
   ,  from_json_file( File::Spec->catfile( Cwd::getcwd(), $DEFAULT_CONFIG_FILE ) )
   );
 
 
-  my $argConfig = {};
   for my $arg ( @_ ){
-    if( $arg =~ m,^-D([^=]+)=(.+)$, ) {
+    if( $arg =~ m,^-D([^=.]+)=(.+)$, ) {
       printLog("config argument passed: '$1' = '$2'" );
+      my $argConfig = {};
       $argConfig->{ $1 } = $2;
+      push( @configs, $argConfig );
+    }
+    elsif( $arg =~ m,^-D([^=]+)=(.+)$, ) {
+      printLog("config argument passed: '$1' = '$2'" );
+      my $argConfig = {};
+      my $compositeKey = $1;
+      my $value = $2;
+
+      my @keyParts = split /\./, $compositeKey;
+      
+      # Check that no key parts are empty.
+      if( grep { $_ eq '' } @keyParts ) {
+        printLog( "CLI config arg has invalid key: '$compositeKey'. Skipping." );
+      }
+      
+      # The first part of the key must always be interpreted as a hash key, even if it is a number.
+      my $evalConfig = '$argConfig->{' . ( shift @keyParts ) . '}';
+      for my $part ( @keyParts ) {
+        # Is the part a non-negative integer?
+        if( $part =~ /^\d+$/ ) {
+          # Consider it an array index.
+          $evalConfig .= "[$part]";
+        }
+        else {
+          # We've got a hash key.
+          $evalConfig .= "{$part}";
+        }
+      }
+      $evalConfig .= " = '$value';";
+
+      printLog( "Eval config: [$evalConfig]" );
+
+      eval $evalConfig;
+
+      push( @configs, $argConfig );
     }
     else {
       printLog("config file passed as arg: $arg" );
       push( @configs, from_json_file( getConfigPath( $arg ) ) );
     }
   }
-
-  push( @configs, $argConfig );
 
   return ( @configs );
 }
@@ -164,7 +206,7 @@ sub getFilenamesByType {
         my $filesForSourceCommands = {};
 
   for my $type ( @{ $config->{ types } } ){
-    my $typeProps = $config->{ typeProps }->{ $type };
+    my $typeProps = $config->{ typeProps }{ $type };
     my $ext = $typeProps->{ extension } or croak "No extension for filetype: $type";
     my @ignores = ( @{ $config->{ ignores } }, @{ $typeProps->{ ignores } } );
 
@@ -188,15 +230,15 @@ sub getFilenamesByType {
         printLog( "\t+ folder: $dir" );
 
         # Make sure there is an array allocated for the extension and directory.
-        unless( defined $filesByTypeAndDir->{ $type }->{ $dir } ) {
-          $filesByTypeAndDir->{ $type }->{ $dir } = ();
+        unless( defined $filesByTypeAndDir->{ $type }{ $dir } ) {
+          $filesByTypeAndDir->{ $type }{ $dir } = ();
         }
 
         find(
           sub {
             my $absFile = $File::Find::name;
             if ( $absFile =~ /\.($ext)$/) {
-              push( @{ $filesByTypeAndDir->{ $type }->{ $dir } }, $absFile );
+              push( @{ $filesByTypeAndDir->{ $type }{ $dir } }, $absFile );
               my $relFile = File::Spec->abs2rel( $absFile, $targetedSrcDir );
               push( @{ $filesForSourceCommands->{ $type } }, $relFile );
               printLog( "\t\tfile: $_" );
@@ -205,11 +247,11 @@ sub getFilenamesByType {
         ,   File::Spec->catdir( $targetedSrcDir, $dir )
         );
 
-        if( ! defined $filesByTypeAndDir->{ $type }->{ $dir } ) {
+        if( ! defined $filesByTypeAndDir->{ $type }{ $dir } ) {
           # Remove keys for extension-directory combinations with no files.
-          delete $filesByTypeAndDir->{ $type }->{ $dir };
+          delete $filesByTypeAndDir->{ $type }{ $dir };
         } else {
-          my $numFiles = @{ $filesByTypeAndDir->{ $type }->{ $dir } };
+          my $numFiles = @{ $filesByTypeAndDir->{ $type }{ $dir } };
           printLog( "\t\tTOTAL:$ext:$dir: $numFiles" );
         }
 
@@ -307,7 +349,7 @@ sub parseDevContent {
   my ( $file, $typeProps, $config ) = @_;
 
   my $buildEnv = $config->{ buildEnv };
-  my $prependToPath = $config->{ env }->{ $buildEnv }->{ prependToPath };
+  my $prependToPath = $config->{ env }{ $buildEnv }{ prependToPath };
 
   my $content = '';
 
@@ -321,9 +363,9 @@ sub parseDevContent {
       if( /$IMPORT_PATTERN/ ) {
         my $relImportPath = $1;
 
-        my $includeString = $typeProps->{ env }->{ $buildEnv }->{ includeString };
+        my $includeString = $typeProps->{ env }{ $buildEnv }{ includeString };
         if( defined $includeString ) {
-          $relImportPath = replaceExtension( $relImportPath, $typeProps->{ env }->{ $buildEnv }->{ extension_out } );
+          $relImportPath = replaceExtension( $relImportPath, $typeProps->{ env }{ $buildEnv }{ extension_out } );
 
           if( defined $prependToPath ) {
             $relImportPath = File::Spec->catfile( $prependToPath, $relImportPath );
@@ -535,24 +577,24 @@ sub makeFiles {
   my ( $config, $filesByTypeAndDir ) = @_;
 
   my $buildEnv = $config->{ buildEnv };
-  my $definedArgs = $config->{ env }->{ $buildEnv }->{ definedArgs };
+  my $definedArgs = $config->{ env }{ $buildEnv }{ definedArgs };
 
   for my $type ( keys %{$filesByTypeAndDir} ) {
-    my $typeProps = $config->{ typeProps }->{ $type };
+    my $typeProps = $config->{ typeProps }{ $type };
     my $ext = $typeProps->{ extension };
     my $ext_out = $typeProps->{ extension_out };
     my $ext_build = ( $typeProps->{ build } ) ? $typeProps->{ build } : $ext;
-    my $extension_out_for_env = $typeProps->{ env }->{ $buildEnv }->{ extension_out };
+    my $extension_out_for_env = $typeProps->{ env }{ $buildEnv }{ extension_out };
     
     my $blockComment = $typeProps->{ block_comment };
     $blockComment =~ s/$REPLACE_PATTERN/$WARNING_MESSAGE/;
     
-    my $outputPath = File::Spec->catdir( $config->{root}, $ext_build, $config->{ folders }->{ build } );
+    my $outputPath = File::Spec->catdir( $config->{root}, $ext_build, $config->{ folders }{ build } );
 
     # Nomenclature note: Each directory in the source-tree becomes a file in the output-tree.
     # So we are iterating over keys which are directory names, but they are used here as the file name.
     for my $filename ( keys %{ $filesByTypeAndDir->{ $type } } ){
-      my $file = File::Spec->catfile( $config->{ folders }->{ scratch }, "$filename.$ext_out" );
+      my $file = File::Spec->catfile( $config->{ folders }{ scratch }, "$filename.$ext_out" );
 
       printLog( "making file $file" );
       my $fh = new IO::File $file, 'w';
@@ -565,7 +607,7 @@ sub makeFiles {
 
       my $buildSort = getBuildSorter( $typeProps->{ firsts }, $typeProps->{ lasts } );
 
-      my @fromFiles = sort $buildSort @{ $filesByTypeAndDir->{ $type }->{ $filename } };
+      my @fromFiles = sort $buildSort @{ $filesByTypeAndDir->{ $type }{ $filename } };
       
       for my $fromFile ( @fromFiles ){
         $fromFile = Cwd::realpath( $fromFile );
@@ -581,7 +623,7 @@ sub makeFiles {
           my $tmpFile = parseDevContent( $fromFile, $typeProps, $config );
           $fh->print( $tmpFile ) if $tmpFile;
 
-          my $includeString = $typeProps->{ env }->{ $buildEnv }->{ includeString };
+          my $includeString = $typeProps->{ env }{ $buildEnv }{ includeString };
           if( defined $includeString ) {
 
             # Get the path to the source file, relative to the configured "root" directory.
@@ -589,7 +631,7 @@ sub makeFiles {
             $relPath = replaceExtension( $relPath, $extension_out_for_env ); # If $extension_out_for_env is undefined, does nothing.
 
             # Prepend something to the path, if configured.
-            my $prependToPath = $config->{ env }->{ $buildEnv }->{ prependToPath };
+            my $prependToPath = $config->{ env }{ $buildEnv }{ prependToPath };
             if( defined $prependToPath ) {
               $relPath = File::Spec->catfile( $prependToPath, $relPath );
             }
@@ -615,24 +657,24 @@ sub makeFiles {
 
 sub moveToTarget {
   my ( $config, $filesByTypeAndDir ) = @_;
-  my $bin = $config->{ folders }->{ build };
+  my $bin = $config->{ folders }{ build };
   my $buildEnv = $config->{ buildEnv };
   my $root = $config->{ root };
   my $doDeletes = $config->{ doDeletes };
 
   for my $type ( keys %{ $filesByTypeAndDir } ) {
-    my $typeProps = $config->{ typeProps }->{ $type };
+    my $typeProps = $config->{ typeProps }{ $type };
     my $ext = $typeProps->{ extension };
     my $ext_out = $typeProps->{ extension_out };
     my $buildFolder = $typeProps->{ build };
 
-    my $commandsArrayRef = $typeProps->{ env }->{ $buildEnv }->{ commands };
+    my $commandsArrayRef = $typeProps->{ env }{ $buildEnv }{ commands };
     my @commands = ( $commandsArrayRef ) ? @{$commandsArrayRef} : ();
 
     # If $buildFolder is blank...
     if( ! defined $buildFolder || $buildFolder eq '' ) {
       # ...then use the default.
-      $buildFolder = File::Spec->catdir( $typeProps->{ extension }, $config->{ folders }->{ build } );
+      $buildFolder = File::Spec->catdir( $typeProps->{ extension }, $config->{ folders }{ build } );
     }
 
     # Prepend the root directory to make an absolute path.
@@ -648,8 +690,8 @@ sub moveToTarget {
 
     for my $filename ( keys %{ $filesByTypeAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
 
-      my $file = File::Spec->catfile( $config->{ folders }->{ scratch }, "$filename.$ext_out" );
-      my $minFile = File::Spec->catfile( $config->{folders}->{minimized}, "$filename.$ext_out" );
+      my $file = File::Spec->catfile( $config->{ folders }{ scratch }, "$filename.$ext_out" );
+      my $minFile = File::Spec->catfile( $config->{folders}{minimized}, "$filename.$ext_out" );
       my $finalFile = File::Spec->catfile( $buildFolder, "$filename.$ext_out" );
       my $sourceFile = $file;
 
@@ -691,7 +733,7 @@ sub doSourceCommands {
   my $buildEnv = $config->{ buildEnv };
 
   for my $type ( keys %{ $filesForSourceCommands } ) {
-    my $typeProps = $config->{ typeProps }->{ $type };
+    my $typeProps = $config->{ typeProps }{ $type };
     my $filelist = join( ' ', @{ $filesForSourceCommands->{ $type } } );
     my @source_commands = @{ $typeProps->{ source_commands } || [] };
     my $envForSourceCommands = $typeProps->{ do_source_commands } || '';
@@ -731,9 +773,9 @@ sub normalizeConfigurationValues {
     # Check that there is a set of type properties for each enumerated type.
     my @badTypes = ();
     for( @{$config->{types}} ) {
-      if( ( ! defined $config->{typeProps}->{$_} )
+      if( ( ! defined $config->{typeProps}{$_} )
           ||
-          ( ref( $config->{typeProps}->{$_} ) ne 'HASH' )
+          ( ref( $config->{typeProps}{$_} ) ne 'HASH' )
         ) {
         push @badTypes, $_;
       }
@@ -744,7 +786,7 @@ sub normalizeConfigurationValues {
 
     # Now check that the type properties hashref contains a valid 'extension' key.
     for( @{$config->{types}} ) {
-      my $typeProps = $config->{typeProps}->{$_};
+      my $typeProps = $config->{typeProps}{$_};
       if( ! defined $typeProps->{extension} ) {
         push @badTypes, $_;
         next;
@@ -788,17 +830,17 @@ sub normalizeConfigurationValues {
 
     # Ensure we have a valid scratch directory setting.
     # This should be a path relative to the "root" directory for the run.  Default: 'tmp'
-    defined $config->{ folders }->{ scratch } or $config->{ folders }->{ scratch } = $SCRATCH_DIR;
+    defined $config->{ folders }{ scratch } or $config->{ folders }{ scratch } = $SCRATCH_DIR;
 
     # Now make the scratch path absolute.
-    $config->{ folders }->{ scratch } = Cwd::abs_path( $config->{ folders }->{ scratch } );
+    $config->{ folders }{ scratch } = Cwd::abs_path( $config->{ folders }{ scratch } );
 
     # And define a minimized-resources directory path.
-    $config->{ folders }->{ minimized } = File::Spec->catdir( $config->{ folders }->{ scratch }, $MIN_DIR );
+    $config->{ folders }{ minimized } = File::Spec->catdir( $config->{ folders }{ scratch }, $MIN_DIR );
 
     # Iterate over the available environments.
     for my $envKey ( keys %{ $config->{env} } ) {
-      my $envConfig = $config->{ env }->{ $envKey } || {};
+      my $envConfig = $config->{ env }{ $envKey } || {};
       # Trim the prependToPath value.
       if( defined $envConfig->{ prependToPath } ) {
         $envConfig->{ prependToPath } =~ s,$TRIMMABLE_WHITESPACE,,g;
@@ -818,7 +860,7 @@ sub setUpResources {
     my $config = shift;
 
     # Set up the scratch directory.
-    my $scratchDir = $config->{ folders }->{ scratch };
+    my $scratchDir = $config->{ folders }{ scratch };
 
     unless( -e $scratchDir ) {
         mkdir $scratchDir, 0777 or croak "Cannot create scratch directory \"$scratchDir\": $!";
@@ -827,7 +869,7 @@ sub setUpResources {
     -w $scratchDir or croak "The scratch directory is not writable: $scratchDir";
 
     # And now its child directory, for minimized resources.
-    my $minDir = $config->{ folders }->{ minimized };
+    my $minDir = $config->{ folders }{ minimized };
 
     unless( -e $minDir ) {
         mkdir $minDir, 0777 or croak "Cannot create minimized resources directory \"$minDir\": $!";
@@ -845,7 +887,7 @@ sub cleanUpResources {
 
     unless( $config->{ keepScratch } ) {
         # Handles its own carping or croaking on errors.
-        File::Path::remove_tree( $config->{ folders }->{ scratch } );
+        File::Path::remove_tree( $config->{ folders }{ scratch } );
     }
 
 }
