@@ -48,6 +48,8 @@ use constant FALSE => '';
 
 #Variables
 
+$main::showConfigOnly = FALSE;
+
 my $DEFAULT_CONFIG_FILE  = 'build.json';
 my $BUILD_ENV_DEV       = 'dev';
 my $BUILD_ENV_PROD      = 'prod';
@@ -139,49 +141,79 @@ sub getConfigs {
 
 
   for my $arg ( @_ ){
-    if( $arg =~ m,^-D([^=.]+)=(.+)$, ) {
-      printLog("config argument passed: '$1' = '$2'" );
-      my $argConfig = {};
-      $argConfig->{ $1 } = $2;
-      push( @configs, $argConfig );
-    }
-    elsif( $arg =~ m,^-D([^=]+)=(.+)$, ) {
-      printLog("config argument passed: '$1' = '$2'" );
-      my $argConfig = {};
-      my $compositeKey = $1;
-      my $value = $2;
+    if( $arg =~ m,^-, ) {
+      # This is a flag argument.
 
-      my @keyParts = split /\./, $compositeKey;
-      
-      # Check that no key parts are empty.
-      if( grep { $_ eq '' } @keyParts ) {
-        printLog( "CLI config arg has invalid key: '$compositeKey'. Skipping." );
+      if( $arg =~ m,^-D([^=.]+)=(.+)$, ) {
+        # This is a config key-value pair, for a top-level config key.
+        printLog("config argument passed: '$1' = '$2'" );
+        my $argConfig = {};
+        $argConfig->{ $1 } = $2;
+        push( @configs, $argConfig );
+        next;
       }
       
-      # The first part of the key must always be interpreted as a hash key, even if it is a number.
-      my $evalConfig = '$argConfig->{' . ( shift @keyParts ) . '}';
-      for my $part ( @keyParts ) {
-        # Is the part a non-negative integer?
-        if( $part =~ /^\d+$/ ) {
-          # Consider it an array index.
-          $evalConfig .= "[$part]";
+      if( $arg =~ m,^-D([^=]+)=(.+)$, ) {
+        # This is a config key-value pair, for a nested config key.
+        printLog("config argument with nested key passed: '$1' = '$2'" );
+        my $argConfig = {};
+        my $compositeKey = $1;
+        my $value = $2;
+
+        my @keyParts = split /\./, $compositeKey;
+        
+        # Check that no key parts are empty.
+        if( grep { $_ eq '' } @keyParts ) {
+          printLog( "CLI config arg has invalid key: '$compositeKey'. Skipping." );
         }
-        else {
-          # We've got a hash key.
-          $evalConfig .= "{$part}";
+        
+        # The first part of the key must always be interpreted as a hash key, even if it is a number.
+        my $evalConfig = '$argConfig->{' . ( shift @keyParts ) . '}';
+        for my $part ( @keyParts ) {
+          # Is the part a non-negative integer?
+          if( $part =~ /^\d+$/ ) {
+            # Consider it an array index.
+            $evalConfig .= "[$part]";
+          }
+          else {
+            # We've got a hash key.
+            $evalConfig .= "{$part}";
+          }
         }
+        $evalConfig .= " = '$value';";
+
+        printLog( "Eval config: [$evalConfig]" );
+
+        eval $evalConfig;
+
+        push( @configs, $argConfig );
+        next;
       }
-      $evalConfig .= " = '$value';";
 
-      printLog( "Eval config: [$evalConfig]" );
-
-      eval $evalConfig;
-
-      push( @configs, $argConfig );
+      if( $arg eq '-c' ) {
+        $main::showConfigOnly = TRUE;
+        next;
+      }
     }
     else {
+      # This is a file argument.
       printLog("config file passed as arg: $arg" );
-      push( @configs, from_json_file( getConfigPath( $arg ) ) );
+      
+      my $absConfigFilePath = getConfigPath( $arg );
+      
+      if( -e $absConfigFilePath ) {
+        if( -r $absConfigFilePath ) {
+          push( @configs, from_json_file( $absConfigFilePath ) );
+        }
+        else {
+          carp "Unable to read config file '$absConfigFilePath'. Skipping.";
+          next;
+        }
+      }
+      else {
+        carp "Config file '$absConfigFilePath' does not exist. Skipping.";
+        next;
+      }
     }
   }
 
@@ -898,6 +930,11 @@ sub run {
 
   # This is a composite of all the default and CLI-specified config files
   my $config = normalizeConfigurationValues( extendNew( getConfigs( @_ ) ) );
+
+  if( $main::showConfigOnly ) {
+    print Data::Dumper->new( [$config], ['config'] )->Indent(3)->Dump();
+    exit 0;
+  }
 
   setUpResources( $config );
 
