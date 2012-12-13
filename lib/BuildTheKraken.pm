@@ -50,7 +50,7 @@ use constant FALSE => '';
 
 $main::showConfigOnly = FALSE;
 
-my $DEFAULT_CONFIG_FILE  = 'build.json';
+my $DEFAULT_CONFIG_FILE  = 'kraken.json';
 my $BUILD_ENV_DEV       = 'dev';
 my $BUILD_ENV_PROD      = 'prod';
 my $BUILD_ENV_BOTH      = 'both';
