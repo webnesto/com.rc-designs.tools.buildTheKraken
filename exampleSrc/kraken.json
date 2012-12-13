@@ -11,9 +11,9 @@
       "firsts" : [
         "jquery"
       ]
-    // , "lasts" : [
-    // "=~^at_unset"
-      // ]
+//  , "lasts" : [
+//      "=~^at_unset"
+//    ]
     }
   }
 }
