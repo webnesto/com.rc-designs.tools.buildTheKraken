@@ -300,10 +300,16 @@ sub getSourceFiles {
   return $filesByTypeAndDir, $filesForSourceCommands;
 }
 
+sub parseSourceFile {
+}
+
 sub parseProdContent {
-  my ( $file, $includedArgsRef, $outputDir )  = @_;
-  my $importPath;
-  my $content;
+  my ( $file, $type, $config )  = @_;
+
+  my $includedArgsRef = $config->{ env }{ $config->{ buildEnv } }{ definedArgs };
+  my $outputDir = $config->{ importroot };
+
+  my $content = '';
 
   if( -e $file ){
     my $fh = new IO::File( $file, "r" );
@@ -356,9 +362,9 @@ sub parseProdContent {
       }
 
       if( /$IMPORT_PATTERN/ ) {
-        $importPath = File::Spec->catfile( $outputDir, $1 );
+        my $importPath = File::Spec->catfile( $outputDir, $1 );
         printLog( "\tPROD - Found import in '$file': '$importPath'" );
-        my $importedContent .= parseProdContent( $importPath, $includedArgsRef, $outputDir );
+        my $importedContent .= parseProdContent( $importPath, $type, $config );
 
         printLog( '=' x 32, $importedContent, '=' x 32 );
 
@@ -384,7 +390,9 @@ sub parseProdContent {
 }
 
 sub parseDevContent {
-  my ( $file, $typeProps, $config ) = @_;
+  my ( $file, $type, $config ) = @_;
+
+  my $typeProps = $config->{ typeProps }{ $type };
 
   my $buildEnv = $config->{ buildEnv };
   my $prependToPath = $config->{ env }{ $buildEnv }{ prependToPath };
@@ -405,7 +413,7 @@ sub parseDevContent {
 
         printLog( "\tdev - parsing file: $absImportPath" );
 
-        my $importedContent .= parseDevContent( $absImportPath, $typeProps, $config );
+        my $importedContent .= parseDevContent( $absImportPath, $type, $config );
         
         printLog( '=' x 32, $importedContent, '=' x 32 );
 
@@ -616,7 +624,6 @@ sub makeFiles {
   my ( $config, $filesByTypeAndDir ) = @_;
 
   my $buildEnv = $config->{ buildEnv };
-  my $definedArgs = $config->{ env }{ $buildEnv }{ definedArgs };
 
   for my $type ( keys %{$filesByTypeAndDir} ) {
     printLog( "Making $type files." );
@@ -658,10 +665,10 @@ sub makeFiles {
         printLog( "\t$buildEnv - parsing top-level file: $fromFile" );
         my $tmpFile = undef;
         if ( $buildEnv eq $BUILD_ENV_PROD ) {
-          $tmpFile = parseProdContent( $fromFile, $definedArgs, $config->{ importroot } );
+          $tmpFile = parseProdContent( $fromFile, $type, $config );
         }
         elsif ( $buildEnv eq $BUILD_ENV_DEV ) {
-          $tmpFile = parseDevContent( $fromFile, $typeProps, $config );
+          $tmpFile = parseDevContent( $fromFile, $type, $config );
         }
 
 
