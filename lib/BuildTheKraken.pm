@@ -220,7 +220,7 @@ sub getConfigs {
   return ( @configs );
 }
 
-sub getFilenamesByType {
+sub getSourceFiles {
 # Expects 1 argument:
 #   $config: A configuration hash reference.
 #
@@ -244,7 +244,7 @@ sub getFilenamesByType {
 
     $filesForSourceCommands->{ $type } = [];
 
-    printLog( "processing $ext" );
+    printLog( "Getting $type source files." );
     defined $filesByTypeAndDir->{ $type } or $filesByTypeAndDir->{ $type } = {};
 
     # If $typeProps->{folder} is defined, look in that subdirectory of the $config->{workDir}.
@@ -273,7 +273,7 @@ sub getFilenamesByType {
               push( @{ $filesByTypeAndDir->{ $type }{ $dir } }, $absFile );
               my $relFile = File::Spec->abs2rel( $absFile, $targetedSrcDir );
               push( @{ $filesForSourceCommands->{ $type } }, $relFile );
-              printLog( "\t\tfile: $_" );
+              printLog( "\t\t$_" );
             }
           }
         ,   File::Spec->catdir( $targetedSrcDir, $dir )
@@ -283,17 +283,19 @@ sub getFilenamesByType {
           # Remove keys for extension-directory combinations with no files.
           delete $filesByTypeAndDir->{ $type }{ $dir };
         } else {
-          my $numFiles = @{ $filesByTypeAndDir->{ $type }{ $dir } };
-          printLog( "\t\tTOTAL:$ext:$dir: $numFiles" );
+          my $numFiles = scalar @{ $filesByTypeAndDir->{ $type }{ $dir } };
+          my $plural = ( $numFiles == 1 ) ? '' : 's';
+          printLog( "\t\t$numFiles file$plural total" );
         }
 
-      } else {
+      }
+      else {
         printLog( "\t- ignore: $dir");
       }
     }
   }
 
-  chdir $config->{workDir}; # Return to whence we came.
+  chdir $config->{workDir}; # Return from whence we came.
 
   return $filesByTypeAndDir, $filesForSourceCommands;
 }
@@ -355,7 +357,7 @@ sub parseProdContent {
 
       if( /$IMPORT_PATTERN/ ) {
         $importPath = File::Spec->catfile( $outputDir, $1 );
-        printLog( "prod - importing: $importPath", '' );
+        printLog( "\tPROD - Found import in '$file': '$importPath'" );
         $content .= parseProdContent( $importPath, $includedArgsRef, $outputDir );
         next;
       }
@@ -612,6 +614,8 @@ sub makeFiles {
   my $definedArgs = $config->{ env }{ $buildEnv }{ definedArgs };
 
   for my $type ( keys %{$filesByTypeAndDir} ) {
+    printLog( "Making $type files." );
+
     my $typeProps = $config->{ typeProps }{ $type };
     my $ext = $typeProps->{ extension };
     my $ext_out = $typeProps->{ extension_out };
@@ -629,7 +633,8 @@ sub makeFiles {
     for my $dir ( keys %{ $filesByTypeAndDir->{ $type } } ){
       my $file = File::Spec->catfile( $config->{ folders }{ scratch }, "$dir.$ext_out" );
 
-      printLog( "making file $file" );
+      printLog( "\tCreating new file '$file' from contents of directory '$dir'." );
+
       my $fh = new IO::File $file, 'w';
       unless( defined $fh ) {
         croak "Could not open file \"$file\": $!";
@@ -645,39 +650,40 @@ sub makeFiles {
       for my $fromFile ( @fromFiles ){
         $fromFile = Cwd::realpath( $fromFile );
 
-        printLog( "\tadding $fromFile" );
-
-        if ( $config->{ buildEnv } eq $BUILD_ENV_PROD ) {
-          my $tmpFile = parseProdContent( $fromFile, $definedArgs, $config->{ importroot } );
-          $fh->print( $tmpFile ) if $tmpFile;
+        printLog( "\t$buildEnv - parsing top-level file: $fromFile" );
+        my $tmpFile = undef;
+        if ( $buildEnv eq $BUILD_ENV_PROD ) {
+          $tmpFile = parseProdContent( $fromFile, $definedArgs, $config->{ importroot } );
         }
-        elsif ( $config->{ buildEnv } eq $BUILD_ENV_DEV ) {
-          printLog( "\tdev - parsing top-level file: $fromFile" );
-          my $tmpFile = parseDevContent( $fromFile, $typeProps, $config );
-          $fh->print( $tmpFile ) if $tmpFile;
+        elsif ( $buildEnv eq $BUILD_ENV_DEV ) {
+          $tmpFile = parseDevContent( $fromFile, $typeProps, $config );
+        }
 
-          my $includeString = $typeProps->{ env }{ $buildEnv }{ includeString };
-          if( defined $includeString ) {
+        if( $tmpFile ) {
+          printLog( "\tGot content from parse method. Storing in '$file'." );
+          $fh->print( $tmpFile );
+        }
 
-            # Get the path to the source file, relative to the configured "root" directory.
-            my $relPath = File::Spec->abs2rel( $fromFile, $config->{root} );
-            $relPath = replaceExtension( $relPath, $extension_out_for_env ); # If $extension_out_for_env is undefined, does nothing.
+        my $includeString = $typeProps->{ env }{ $buildEnv }{ includeString };
+        if( defined $includeString ) {
 
-            # Prepend something to the path, if configured.
-            my $prependToPath = $config->{ env }{ $buildEnv }{ prependToPath };
-            if( defined $prependToPath ) {
-              $relPath = File::Spec->catfile( $prependToPath, $relPath );
-            }
-
-            # Set the relative path in the include string.
-            $includeString =~ s/$REPLACE_PATTERN/$relPath/;
-
-            printLog( "\tdev - writing top-level includeString: $includeString" );
-
-            $fh->print( $includeString . $/ );
+          # Get the path to the source file, relative to the configured "root" directory.
+          my $relPath = File::Spec->abs2rel( $fromFile, $config->{root} );
+          $relPath = replaceExtension( $relPath, $extension_out_for_env ); # If $extension_out_for_env is undefined, does nothing.
+          
+          # Prepend something to the path, if configured.
+          my $prependToPath = $config->{ env }{ $buildEnv }{ prependToPath };
+          if( defined $prependToPath ) {
+            $relPath = File::Spec->catfile( $prependToPath, $relPath );
           }
-        }
 
+          # Set the relative path in the include string.
+          $includeString =~ s/$REPLACE_PATTERN/$relPath/;
+
+          printLog( "\tdev - writing top-level includeString: $includeString" );
+
+          $fh->print( $includeString . $/ );
+        }
       }
       
       $fh->print( $typeProps->{ postpend } );
@@ -696,6 +702,7 @@ sub moveToTarget {
   my $doDeletes = $config->{ doDeletes };
 
   for my $type ( keys %{ $filesByTypeAndDir } ) {
+    printLog( "Moving $type files." );
     my $typeProps = $config->{ typeProps }{ $type };
     my $ext = $typeProps->{ extension };
     my $ext_out = $typeProps->{ extension_out };
@@ -731,9 +738,9 @@ sub moveToTarget {
       if( $buildEnv eq $BUILD_ENV_PROD ) {
         # This line accounts for the case where there are no production commands.
         copy( $file, $minFile ) or printLog( "Could not copy $file to $minFile: $!" );
-        printLog( "running production commands on file: $file" );
+        printLog( "\trunning PRODUCTION commands on file: $file" );
         for my $command ( @commands ){
-          printLog( "rawcommand: $command" );
+          printLog( "\t\trawcommand: $command" );
           my $replacementHashref = {
             scriptsPath => $Bin
           , infile      => $file
@@ -741,7 +748,7 @@ sub moveToTarget {
           };
           $command = replaceVariables( $command, $replacementHashref );
 
-          printLog( "prod - trying $command" );
+          printLog( "\t\tprod - trying $command" );
           `$command`;
         }
         $sourceFile = $minFile;
@@ -760,32 +767,33 @@ sub moveToTarget {
 }
 
 sub runPostProcessCommands {
-  printLog( "running post-process commands" );
   my ( $config, $filesForSourceCommands ) = @_;
   my $root = $config->{ root };
   my $buildEnv = $config->{ buildEnv };
 
   for my $type ( keys %{ $filesForSourceCommands } ) {
+    printLog( "Running post-process commands for $type." );
     my $typeProps = $config->{ typeProps }{ $type };
     my $filelist = join( ' ', @{ $filesForSourceCommands->{ $type } } );
-    my @source_commands = @{ $typeProps->{ env }{ $buildEnv }{ commands }{ postProcess } || [] };
+    my @postProcessCommands = @{ $typeProps->{ env }{ $buildEnv }{ commands }{ postProcess } || [] };
 
-    printLog( "ROOT: $root" );
+    if( scalar @postProcessCommands > 0 ) {
+      for my $command ( @postProcessCommands ){
+        my $replacementHashref = {
+          scriptsPath => $Bin
+        , files       => $filelist
+        , root        => $root
+        };
+        $command = replaceVariables( $command, $replacementHashref );
 
-    for my $command ( @source_commands ){
-      my $replacementHashref = {
-        scriptsPath => $Bin
-      , files       => $filelist
-      , root        => $root
-      };
-      $command = replaceVariables( $command, $replacementHashref );
-
-      printLog( "\ttrying: $command" );
-      `$command`;
+        printLog( "\ttrying: $command" );
+        `$command`;
+      }
+    }
+    else {
+      printLog( "\tNone found." );
     }
   }
-
-  printLog( "ending source commands" );
 }
 
 sub normalizeConfigurationValues {
@@ -937,7 +945,7 @@ sub run {
 
   #TODO: implement subs iteration - allow arguments for subs - default "current" directory.
 
-  my ( $filesByTypeAndDir, $filesForSourceCommands ) = getFilenamesByType( $config );
+  my ( $filesByTypeAndDir, $filesForSourceCommands ) = getSourceFiles( $config );
 
   makeFiles( $config, $filesByTypeAndDir );
 
