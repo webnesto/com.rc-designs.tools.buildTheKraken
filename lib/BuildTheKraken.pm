@@ -643,11 +643,11 @@ sub makeFiles {
       $fh->print( $blockComment .  $/ );
       $fh->print( $typeProps->{ prepend } );
 
-      my $buildSort = getBuildSorter( $typeProps->{ firsts }, $typeProps->{ lasts } );
+      my $buildSorter = getBuildSorter( $typeProps->{ firsts }, $typeProps->{ lasts } );
 
-      my @fromFiles = sort $buildSort @{ $filesByTypeAndDir->{ $type }{ $dir } };
+      my @sortedSourceFiles = sort $buildSorter @{ $filesByTypeAndDir->{ $type }{ $dir } };
       
-      for my $fromFile ( @fromFiles ){
+      for my $fromFile ( @sortedSourceFiles ){
         $fromFile = Cwd::realpath( $fromFile );
 
         printLog( "\t$buildEnv - parsing top-level file: $fromFile" );
@@ -708,8 +708,8 @@ sub moveToTarget {
     my $ext_out = $typeProps->{ extension_out };
     my $buildFolder = $typeProps->{ build };
 
-    my $commandsArrayRef = $typeProps->{ env }{ $buildEnv }{ commands }{ perFile };
-    my @commands = ( $commandsArrayRef ) ? @{$commandsArrayRef} : ();
+    my $perFileCommandsArrayRef = $typeProps->{ env }{ $buildEnv }{ commands }{ perFile };
+    my @perFileCommands = @{ $perFileCommandsArrayRef || [] };
 
     # If $buildFolder is blank...
     if( ! defined $buildFolder || $buildFolder eq '' ) {
@@ -731,33 +731,41 @@ sub moveToTarget {
     for my $dir ( keys %{ $filesByTypeAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
 
       my $file = File::Spec->catfile( $config->{ folders }{ scratch }, "$dir.$ext_out" );
-      my $minFile = File::Spec->catfile( $config->{folders}{minimized}, "$dir.$ext_out" );
+      my $processedFile = File::Spec->catfile( $config->{folders}{minimized}, "$dir.$ext_out" );
       my $finalFile = File::Spec->catfile( $buildFolder, "$dir.$ext_out" );
-      my $sourceFile = $file;
 
-      if( $buildEnv eq $BUILD_ENV_PROD ) {
-        # This line accounts for the case where there are no production commands.
-        copy( $file, $minFile ) or printLog( "Could not copy $file to $minFile: $!" );
-        printLog( "\trunning PRODUCTION commands on file: $file" );
-        for my $command ( @commands ){
-          printLog( "\t\trawcommand: $command" );
+      if( scalar @perFileCommands > 0 ) {
+        printLog( "\t$buildEnv - Running per-file commands on file: $file" );
+        for my $perFileCommand ( @perFileCommands ) {
+          printLog( "\t\tPer-file command template: $perFileCommand" );
           my $replacementHashref = {
             scriptsPath => $Bin
           , infile      => $file
-          , outfile     => $minFile
+          , outfile     => $processedFile
           };
-          $command = replaceVariables( $command, $replacementHashref );
+          $perFileCommand = replaceVariables( $perFileCommand, $replacementHashref );
 
-          printLog( "\t\tprod - trying $command" );
-          `$command`;
+          printLog( "\t\tExecuting: $perFileCommand" );
+          `$perFileCommand`;
+          if( $? ) {
+            # The command returned with a non-zero exit status.
+            printLog( "\t\tThe per-file command returned exit status '" . ($? >> 8) . "'. Not using its output." );
+            next;
+          }
+
+          # Copy so that the next iteration will start with the output of this iteration.
+          printLog( "Copying '$processedFile' over '$file'" );
+          copy( $processedFile, $file );
+          # Delete the processed file so the next iteration's command does not complain it already exists.
+          unlink( $processedFile );
         }
-        $sourceFile = $minFile;
       }
-      
-#      printLog( "sourceFile: $sourceFile" );
+      else {
+        printLog( "\t\tNone found." );
+      }
 
-      unless( copy( $sourceFile, $finalFile ) ) {
-        printLog( "Could not copy $sourceFile, to $finalFile: $!" );
+      unless( copy( $file, $finalFile ) ) {
+        printLog( "Could not copy $file, to $finalFile: $!" );
         next;
       }
 
