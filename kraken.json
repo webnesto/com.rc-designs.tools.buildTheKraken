@@ -94,20 +94,20 @@
             ]
 
           }
-        , "dev": {
-            "commands": {
-              "perFile": [
-                // None for dev.
-              ]
-            , "perDirectory": [
-                // None for dev.
-              ]
-            , "postProcess": [
-                // None for dev.
-              ]
-            }
-          , "includeString": "@import \"-CONTENT-\";"
+        }
+      , "dev": {
+          "commands": {
+            "perFile": [
+              // None for dev.
+            ]
+          , "perDirectory": [
+              // None for dev.
+            ]
+          , "postProcess": [
+              // None for dev.
+            ]
           }
+        , "includeString": "@import \"-CONTENT-\";"
         }
       }
     }
