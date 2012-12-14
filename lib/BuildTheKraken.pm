@@ -358,7 +358,11 @@ sub parseProdContent {
       if( /$IMPORT_PATTERN/ ) {
         $importPath = File::Spec->catfile( $outputDir, $1 );
         printLog( "\tPROD - Found import in '$file': '$importPath'" );
-        $content .= parseProdContent( $importPath, $includedArgsRef, $outputDir );
+        my $importedContent .= parseProdContent( $importPath, $includedArgsRef, $outputDir );
+
+        printLog( '=' x 32, $importedContent, '=' x 32 );
+
+        $content .= $importedContent;
         next;
       }
       
@@ -397,28 +401,29 @@ sub parseDevContent {
       if( /$IMPORT_PATTERN/ ) {
         my $relImportPath = $1;
 
-        my $includeString = $typeProps->{ env }{ $buildEnv }{ includeString };
-        if( defined $includeString ) {
+        my $absImportPath = File::Spec->catfile( $config->{ importroot }, $relImportPath );
+
+        printLog( "\tdev - parsing file: $absImportPath" );
+
+        my $importedContent .= parseDevContent( $absImportPath, $typeProps, $config );
+        
+        printLog( '=' x 32, $importedContent, '=' x 32 );
+
+        $content .= $importedContent;
+        
+        my $importString = $typeProps->{ env }{ $buildEnv }{ importString };
+        if( defined $importString ) {
           $relImportPath = replaceExtension( $relImportPath, $typeProps->{ env }{ $buildEnv }{ extension_out } );
 
           if( defined $prependToPath ) {
             $relImportPath = File::Spec->catfile( $prependToPath, $relImportPath );
           }
 
-          $includeString =~ s/$REPLACE_PATTERN/$relImportPath/;
+          $importString =~ s/$REPLACE_PATTERN/$relImportPath/;
 
-        }
-
-        my $absImportPath = File::Spec->catfile( $config->{ importroot }, $relImportPath );
-
-        printLog( "\tdev - parsing file: $absImportPath" );
-
-        $content .= parseDevContent( $absImportPath, $typeProps, $config );
-        
-        printLog( "\tdev - writing includeString: $includeString" );
-
-        if( defined $includeString ) {
-          $content .= $includeString . $/;
+          printLog( "\tdev - writing importString: $importString" );
+          
+          $content .= $importString . $/;
         }
       }
     }
@@ -659,13 +664,15 @@ sub makeFiles {
           $tmpFile = parseDevContent( $fromFile, $typeProps, $config );
         }
 
+
         if( $tmpFile ) {
+          printLog( '=' x 32, $tmpFile, '=' x 32 );
           printLog( "\tGot content from parse method. Storing in '$file'." );
           $fh->print( $tmpFile );
         }
 
-        my $includeString = $typeProps->{ env }{ $buildEnv }{ includeString };
-        if( defined $includeString ) {
+        my $importString = $typeProps->{ env }{ $buildEnv }{ importString };
+        if( defined $importString ) {
 
           # Get the path to the source file, relative to the configured "root" directory.
           my $relPath = File::Spec->abs2rel( $fromFile, $config->{root} );
@@ -678,11 +685,11 @@ sub makeFiles {
           }
 
           # Set the relative path in the include string.
-          $includeString =~ s/$REPLACE_PATTERN/$relPath/;
+          $importString =~ s/$REPLACE_PATTERN/$relPath/;
 
-          printLog( "\tdev - writing top-level includeString: $includeString" );
+          printLog( "\tdev - writing top-level importString: $importString" );
 
-          $fh->print( $includeString . $/ );
+          $fh->print( $importString . $/ );
         }
       }
       
@@ -811,9 +818,20 @@ sub normalizeConfigurationValues {
 #   $config: The configuration hash reference.
 #   $workDir: The current working directory.
 
+  printLog( 'Validating and normalizing the build configuration.' );
+
     my $config = shift;
     my $workDir = shift || Cwd::getcwd();
     $config->{ workDir } = Cwd::abs_path( $workDir );
+
+    # Check the validity of the build enviroment setting.  It must be one of the keys
+    # of the "env" hash at the top level of the config tree.  In the default configuration
+    # file, the values are "prod" and "dev".
+    my @validEnvironments = keys %{ $config->{ env } };
+    my $buildEnv = $config->{ buildEnv };
+    unless( grep { /$buildEnv/ } @validEnvironments ) {
+      croak "Build environment value '$buildEnv' not found in environment list: '" . join( "', '", @validEnvironments ) . "'";
+    }
 
     # Check that there is a set of type properties for each enumerated type.
     my @badTypes = ();
@@ -853,14 +871,20 @@ sub normalizeConfigurationValues {
       croak 'Missing or invalid extensions configured for types: ' . join( ', ', @badTypes );
     }
 
-    # Check the validity of the build enviroment setting.  It must be one of the keys
-    # of the "env" hash at the top level of the config tree.  In the default configuration
-    # file, the values are "prod" and "dev".
-    my @validEnvironments = keys %{ $config->{ env } };
-    my $buildEnv = $config->{ buildEnv };
-    unless( grep { /$buildEnv/ } @validEnvironments ) {
-      croak "Build environment value '$buildEnv' not found in environment list: '" . join( "', '", @validEnvironments ) . "'";
+    # Check that if we are not flattening imports, we have an import string for each type.
+    if( ! $config->{ env }{ $buildEnv }{ flattenImports } ) {
+      for( @{$config->{types}} ) {
+        my $typeProps = $config->{typeProps}{$_};
+        unless( defined $typeProps->{ env }{ $buildEnv }{ importString } ) {
+          push @badTypes, $_;
+        }
+      }
+      if( scalar @badTypes > 0 ) {
+        croak "Configuration for environment '$buildEnv' specifies NOT flattening imports, "
+          . 'but there is no importString defined for these types: ' . join( ', ', @badTypes );
+      }
     }
+
 
     # $config->{importroot} is relative to $config->{root}.
     # So cat them before canonicalizing it below.
@@ -895,7 +919,9 @@ sub normalizeConfigurationValues {
       }
     }
 
-    return $config;
+  printLog( "\tConfiguration is valid and has been normalized." );
+
+  return $config;
 }
 
 sub setUpResources {

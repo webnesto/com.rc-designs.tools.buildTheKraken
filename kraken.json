@@ -66,7 +66,7 @@
             ]
           }
 //      , "extension_out": ""           // Optional - different extension for use in this build environment.
-        , "includeString": "document.write('<scr'+'ipt type=\"text/javascript\" src=\"-CONTENT-\"></scr'+'ipt>')"
+        , "importString": "document.write('<scr'+'ipt type=\"text/javascript\" src=\"-CONTENT-\"></scr'+'ipt>')"
         }
       }
     }
@@ -107,7 +107,7 @@
               // None for dev.
             ]
           }
-        , "includeString": "@import \"-CONTENT-\";"
+        , "importString": "@import \"-CONTENT-\";"
         }
       }
     }
@@ -149,7 +149,7 @@
               // None for dev.
             ]
           }
-        , "includeString": "@import \"-CONTENT-\";"
+        , "importString": "@import \"-CONTENT-\";"
         }
       }
     }
@@ -176,7 +176,7 @@
               // None for dev.
             ]
           }
-        , "includeString": "<!--#include virtual=\"-CONTENT-\" -->"
+        , "importString": "<!--#include virtual=\"-CONTENT-\" -->"
         }
       }
     }
