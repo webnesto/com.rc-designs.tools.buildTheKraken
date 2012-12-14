@@ -41,17 +41,30 @@
     , "postpend": ""                      // will finish content - good for closing wrapper functions
     , "env": {
         "prod": {                         // commands run once for each "built" file when the build environment matches this key.  Available variables "${scriptsPath}", "${infile}", "${outfile}"
-          "commands": [
-            "java  -jar \"${scriptsPath}/ext/yuicompressor-2.4.2.jar\" ${infile} -o ${outfile}  --line-break 1000" // -v"
-          ]
-        , "postProcessingCommands": [     // Will be run once.  Passed a space separated list of all source files in variable ${files} position.
-            "java  -jar  \"${scriptsPath}/ext/jsdoc-toolkit/jsrun.jar\" \"${scriptsPath}/ext/jsdoc-toolkit/app/run.js\" -a -r=10 -d=${root}/../docs/js -t=${scriptsPath}/ext/jsdoc-toolkit/templates/jsdoc ${files}"
-          ]
+          "commands": {
+            "perFile": [
+              "java  -jar \"${scriptsPath}/ext/yuicompressor-2.4.2.jar\" ${infile} -o ${outfile}  --line-break 1000" // -v"
+            ]
+          , "perDirectory": [
+              // None for prod.
+            ]
+          , "postProcess": [
+              "java  -jar  \"${scriptsPath}/ext/jsdoc-toolkit/jsrun.jar\" \"${scriptsPath}/ext/jsdoc-toolkit/app/run.js\" -a -r=10 -d=${root}/docs/js -t=${scriptsPath}/ext/jsdoc-toolkit/templates/jsdoc ${files}"
+            ]
+          }
         }
       , "dev": {
-          "commands": [
-            // None for dev.
-          ]
+          "commands": {
+            "perFile": [
+              // None for dev.
+            ]
+          , "perDirectory": [
+              // None for dev.
+            ]
+          , "postProcess": [
+              // None for dev.
+            ]
+          }
 //      , "extension_out": ""           // Optional - different extension for use in this build environment.
         , "includeString": "document.write('<scr'+'ipt type=\"text/javascript\" src=\"-CONTENT-\"></scr'+'ipt>')"
         }
@@ -69,18 +82,32 @@
     , "postpend": ""
     , "env": {
         "prod": {                         // commands run once for each "built" file when the build environment matches this key.  Available variables "${scriptsPath}", "${infile}", "${outfile}"
-          "commands": [
-            "java  -jar \"${scriptsPath}/ext/yuicompressor-2.4.2.jar\" ${infile} -o ${outfile}  --line-break 1000 " //-v"
-          ]
-        , "postProcessingCommands": [     // Will be run once.  Passed a space separated list of all source files in variable ${files} position.
-            // None for prod.
-          ]
-        }
-      , "dev": {
-          "commands": [
-            // None for dev.
-          ]
-        , "includeString": "@import \"-CONTENT-\";"
+          "commands": {
+            "perFile": [
+              "java  -jar \"${scriptsPath}/ext/yuicompressor-2.4.2.jar\" ${infile} -o ${outfile}  --line-break 1000 " //-v"
+            ]
+          , "perDirectory": [
+              // None for prod.
+            ]
+          , "postProcess": [
+              // None for prod.
+            ]
+
+          }
+        , "dev": {
+            "commands": {
+              "perFile": [
+                // None for dev.
+              ]
+            , "perDirectory": [
+                // None for dev.
+              ]
+            , "postProcess": [
+                // None for dev.
+              ]
+            }
+          , "includeString": "@import \"-CONTENT-\";"
+          }
         }
       }
     }
@@ -97,18 +124,31 @@
     , "postpend": ""
     , "env": {
         "prod": {                         // commands run once for each "built" file when the build environment matches this key.  Available variables "${scriptsPath}", "${infile}", "${outfile}"
-          "commands": [
-            "java -jar \"${scriptsPath}/ext/rhino/js.jar\" \"${scriptsPath}/ext/less-rhino-1.1.5.js\" ${infile} ${outfile}"
-          , "java -jar \"${scriptsPath}/ext/yuicompressor-2.4.2.jar\" ${infile} -o ${outfile}  --line-break 1000 " //-v"
-          ]
-        , "postProcessingCommands": [     // Will be run once.  Passed a space separated list of all source files in variable ${files} position.
-            "java  -jar  \"${scriptsPath}/ext/jsdoc-toolkit/jsrun.jar\" \"${scriptsPath}/ext/jsdoc-toolkit/app/run.js\" -a -r=10 -d=${root}/../docs/js -t=${scriptsPath}/ext/jsdoc-toolkit/templates/jsdoc ${files}"
-          ]
+          "commands": {
+            "perFile": [
+              "java -jar \"${scriptsPath}/ext/rhino/js.jar\" \"${scriptsPath}/ext/less-rhino-1.1.5.js\" ${infile} ${outfile}"
+            , "java -jar \"${scriptsPath}/ext/yuicompressor-2.4.2.jar\" ${infile} -o ${outfile}  --line-break 1000 " //-v"
+            ]
+          , "perDirectory": [
+              // None for prod.
+            ]
+          , "postProcess": [
+              "java  -jar  \"${scriptsPath}/ext/jsdoc-toolkit/jsrun.jar\" \"${scriptsPath}/ext/jsdoc-toolkit/app/run.js\" -a -r=10 -d=${root}/docs/js -t=${scriptsPath}/ext/jsdoc-toolkit/templates/jsdoc ${files}"
+            ]
+          }
         }
       , "dev": {
-          "commands": [
-            // None for dev.
-          ]
+          "commands": {
+            "perFile": [
+              // None for dev.
+            ]
+          , "perDirectory": [
+              // None for dev.
+            ]
+          , "postProcess": [
+              // None for dev.
+            ]
+          }
         , "includeString": "@import \"-CONTENT-\";"
         }
       }
@@ -125,7 +165,18 @@
     , "postpend": ""
     , "env": {
         "dev": {
-          "includeString": "<!--#include virtual=\"-CONTENT-\" -->"
+          "commands": {
+            "perFile": [
+              // None for dev.
+            ]
+          , "perDirectory": [
+              // None for dev.
+            ]
+          , "postProcess": [
+              // None for dev.
+            ]
+          }
+        , "includeString": "<!--#include virtual=\"-CONTENT-\" -->"
         }
       }
     }

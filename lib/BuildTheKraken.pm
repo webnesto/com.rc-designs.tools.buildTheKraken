@@ -624,9 +624,10 @@ sub makeFiles {
     my $outputPath = File::Spec->catdir( $config->{root}, $ext_build, $config->{ folders }{ build } );
 
     # Nomenclature note: Each directory in the source-tree becomes a file in the output-tree.
-    # So we are iterating over keys which are directory names, but they are used here as the file name.
-    for my $filename ( keys %{ $filesByTypeAndDir->{ $type } } ){
-      my $file = File::Spec->catfile( $config->{ folders }{ scratch }, "$filename.$ext_out" );
+    # So we are iterating over keys which are directory names, and are used to determine the
+    # output file name.
+    for my $dir ( keys %{ $filesByTypeAndDir->{ $type } } ){
+      my $file = File::Spec->catfile( $config->{ folders }{ scratch }, "$dir.$ext_out" );
 
       printLog( "making file $file" );
       my $fh = new IO::File $file, 'w';
@@ -639,7 +640,7 @@ sub makeFiles {
 
       my $buildSort = getBuildSorter( $typeProps->{ firsts }, $typeProps->{ lasts } );
 
-      my @fromFiles = sort $buildSort @{ $filesByTypeAndDir->{ $type }{ $filename } };
+      my @fromFiles = sort $buildSort @{ $filesByTypeAndDir->{ $type }{ $dir } };
       
       for my $fromFile ( @fromFiles ){
         $fromFile = Cwd::realpath( $fromFile );
@@ -700,7 +701,7 @@ sub moveToTarget {
     my $ext_out = $typeProps->{ extension_out };
     my $buildFolder = $typeProps->{ build };
 
-    my $commandsArrayRef = $typeProps->{ env }{ $buildEnv }{ commands };
+    my $commandsArrayRef = $typeProps->{ env }{ $buildEnv }{ commands }{ perFile };
     my @commands = ( $commandsArrayRef ) ? @{$commandsArrayRef} : ();
 
     # If $buildFolder is blank...
@@ -720,11 +721,11 @@ sub moveToTarget {
       emptyDirOfType( $buildFolder, $ext_out );
     }
 
-    for my $filename ( keys %{ $filesByTypeAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
+    for my $dir ( keys %{ $filesByTypeAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
 
-      my $file = File::Spec->catfile( $config->{ folders }{ scratch }, "$filename.$ext_out" );
-      my $minFile = File::Spec->catfile( $config->{folders}{minimized}, "$filename.$ext_out" );
-      my $finalFile = File::Spec->catfile( $buildFolder, "$filename.$ext_out" );
+      my $file = File::Spec->catfile( $config->{ folders }{ scratch }, "$dir.$ext_out" );
+      my $minFile = File::Spec->catfile( $config->{folders}{minimized}, "$dir.$ext_out" );
+      my $finalFile = File::Spec->catfile( $buildFolder, "$dir.$ext_out" );
       my $sourceFile = $file;
 
       if( $buildEnv eq $BUILD_ENV_PROD ) {
@@ -758,8 +759,8 @@ sub moveToTarget {
   }
 }
 
-sub doSourceCommands {
-  printLog( "beginning source commands" );
+sub runPostProcessCommands {
+  printLog( "running post-process commands" );
   my ( $config, $filesForSourceCommands ) = @_;
   my $root = $config->{ root };
   my $buildEnv = $config->{ buildEnv };
@@ -767,24 +768,20 @@ sub doSourceCommands {
   for my $type ( keys %{ $filesForSourceCommands } ) {
     my $typeProps = $config->{ typeProps }{ $type };
     my $filelist = join( ' ', @{ $filesForSourceCommands->{ $type } } );
-    my @source_commands = @{ $typeProps->{ source_commands } || [] };
-    my $envForSourceCommands = $typeProps->{ do_source_commands } || '';
+    my @source_commands = @{ $typeProps->{ env }{ $buildEnv }{ commands }{ postProcess } || [] };
 
-    my $doRunCommands = ( $envForSourceCommands eq $buildEnv
-                          or $envForSourceCommands eq $BUILD_ENV_BOTH );
+    printLog( "ROOT: $root" );
 
-    if( $doRunCommands ){
-      for my $command ( @source_commands ){
-        my $replacementHashref = {
-          scriptsPath => $Bin
-        , files       => $filelist
-        , root        => $root
-        };
-        $command = replaceVariables( $command, $replacementHashref );
+    for my $command ( @source_commands ){
+      my $replacementHashref = {
+        scriptsPath => $Bin
+      , files       => $filelist
+      , root        => $root
+      };
+      $command = replaceVariables( $command, $replacementHashref );
 
-        printLog( "\ttrying: $command" );
-        `$command`;
-      }
+      printLog( "\ttrying: $command" );
+      `$command`;
     }
   }
 
@@ -948,7 +945,7 @@ sub run {
 
   cleanUpResources( $config );
 
-  doSourceCommands( $config, $filesForSourceCommands );
+  runPostProcessCommands( $config, $filesForSourceCommands );
 
   logEnd( $config->{ buildEnv } );
 }
