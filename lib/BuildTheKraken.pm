@@ -100,18 +100,10 @@ sub printOrder ($) {
 #  printLog( "Neither should come first, this is borken!\n" );
 }
 
-sub getConfigPath {
-  my ( $path ) = @_;
-
-  if( File::Spec->file_name_is_absolute( $path ) ){
-    return $path;
-  } else {
-    return File::Spec->catfile( Cwd::getcwd(), $path );
-  }
-}
-
 sub getDefinedArgConfig {
   my ( $key, $value ) = @_;
+
+  printLog( "Key-value config passed on command line: '$key' = '$value'" );
 
   my $config = {};
 
@@ -156,7 +148,7 @@ sub getDefinedArgConfig {
 sub getFileConfig {
   my $filepath = shift;
 
-  printLog("Config file passed on command-line: $filepath" );
+  printLog( "Config file passed on command-line: $filepath" );
 
   if( -e $filepath ) {
     if( -r $filepath ) {
@@ -175,6 +167,8 @@ sub getFileConfig {
 
 sub getJsonStringConfig {
   my $jsonString = shift;
+
+  printLog( "JSON config passed on command line: $jsonString" );
 
   return from_json_string( $jsonString );
 }
@@ -859,6 +853,10 @@ sub normalizeConfigurationValues {
     }
 
 
+  if( File::Spec->file_name_is_absolute( $config->{ importroot } ) ) {
+    croak "Configuration value 'importroot' is an absolute path ('$config->{importroot}'), but it should be relative to the path in the configuration value 'root' ('$config->{root}').";
+  }
+
     # $config->{importroot} is relative to $config->{root}.
     # So cat them before canonicalizing it below.
     $config->{importroot} = File::Spec->catdir( $config->{root}, $config->{importroot} );
@@ -945,11 +943,11 @@ sub run {
   my $showFilesOnly = FALSE;
 
   my $optionsResult = GetOptions(
-    'config-only'    => sub { $showConfigOnly = TRUE; $showFilesOnly = FALSE; }
-  , 'files-only'     => sub { $showFilesOnly = TRUE; $showConfigOnly = FALSE; }
-  , 'define:s%'      => sub { my ( $option, $key, $value ) = @_; push @configs, getDefinedArgConfig( $key, $value ); }
-  , 'json-define:s%' => sub { my $jsonString = $_[0]; push @configs, getJsonStringConfig( $jsonString ); }
-  , '<>'             => sub { my $file = $_[0]; push @configs, getFileConfig( $file ); }
+    'config-only'   => sub { $showConfigOnly = TRUE; $showFilesOnly = FALSE; }
+  , 'files-only'    => sub { $showFilesOnly = TRUE; $showConfigOnly = FALSE; }
+  , 'define:s%'     => sub { my ( undef, $key, $value ) = @_; push @configs, getDefinedArgConfig( $key, $value ); }
+  , 'json-define:s' => sub { my ( undef, $jsonString ) = @_; push @configs, getJsonStringConfig( $jsonString ); }
+  , '<>'            => sub { my $file = $_[0]; push @configs, getFileConfig( $file ); }
     );
 
   logStart();
@@ -958,6 +956,7 @@ sub run {
   my $config = normalizeConfigurationValues( extendNew( @configs ) );
 
   if( $showConfigOnly ) {
+    printLog('','','','');
     print Data::Dumper->new( [$config], ['config'] )->Indent(3)->Dump();
     exit 0;
   }
