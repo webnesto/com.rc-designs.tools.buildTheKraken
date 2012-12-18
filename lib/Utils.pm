@@ -109,8 +109,6 @@ sub from_json_file {
   my $json = "";
 
   if( -r $file ){
-    printLog( "Getting hashref from JSON file: $file" );
-
     my $fh = new IO::File( $file, 'r' );
     croak "Cannot open file for reading: $file" unless defined $fh;;
 
