@@ -7,4 +7,4 @@ use lib "${FindBin::Bin}/lib";
 
 use BuildTheKraken;
 
-BuildTheKraken::run( @ARGV );
+BuildTheKraken::run();

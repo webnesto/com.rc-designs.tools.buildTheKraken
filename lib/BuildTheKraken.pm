@@ -39,16 +39,15 @@ use File::Find;
 use File::Path;
 use File::Spec;
 use FindBin qw( $Bin );
+use Getopt::Long;
 use IO::File;
 use List::Util qw( first );
-use Utils qw( printLog extend extendNew from_json_file emptyDirOfType replaceVariables );
+use Utils qw( printLog extend extendNew from_json_file from_json_string emptyDirOfType replaceVariables );
 
 use constant TRUE  => 1;
 use constant FALSE => '';
 
 #Variables
-
-$main::showConfigOnly = FALSE;
 
 my $DEFAULT_CONFIG_FILE  = 'kraken.json';
 my $BUILD_ENV_DEV       = 'dev';
@@ -111,113 +110,79 @@ sub getConfigPath {
   }
 }
 
-sub getConfigs {
-# Expects a list of config file paths, either absolute or relative to the working directory.
-#
-# Arbitrary configuration values may be passed on the command-line using the format:
-#  -D{configKey}={configValue}
-#
-# Nested keys are addressed using dot-notation.  For example you could override the
-# "LESS CSS" build directory with this argument:
-#  "-DtypeProps.LESS CSS.build=other-css/bin"
-#
-# Note the quoting for the embedded space.
-#
-# The first key-part, after "-D" and before the first dot, is always treated as a hash key.
-# Subsequent key-parts are also treated as hash keys, unless they are non-negative integers,
-# in which case they are treated as array indices.
-#
-# Order is important.  Values for duplicate configuration keys override earlier ones.  So the
-# values for duplicate configuration keys, if any, in the working directory configuration
-# override those in the script directory.  And configuration file paths at the end of the
-# command-line will have precedence over earlier paths, while the entire set of passed arguments
-# has precedence over the two defaults, with later arguments taking precedence.
+sub getDefinedArgConfig {
+  my ( $key, $value ) = @_;
 
+  my $config = {};
 
-  my @configs = (
-    from_json_file( File::Spec->catfile( $Bin, $DEFAULT_CONFIG_FILE ) )
-  ,  from_json_file( File::Spec->catfile( Cwd::getcwd(), $DEFAULT_CONFIG_FILE ) )
-  );
+  if( $key =~ /^[^.].*\..*[^.]$/ ) {
+    # Dotted notation
 
-
-  for my $arg ( @_ ){
-    if( $arg =~ m,^-, ) {
-      # This is a flag argument.
-
-      if( $arg =~ m,^-D([^=.]+)=(.+)$, ) {
-        # This is a config key-value pair, for a top-level config key.
-        printLog("config argument passed: '$1' = '$2'" );
-        my $argConfig = {};
-        $argConfig->{ $1 } = $2;
-        push( @configs, $argConfig );
-        next;
-      }
-      
-      if( $arg =~ m,^-D([^=]+)=(.+)$, ) {
-        # This is a config key-value pair, for a nested config key.
-        printLog("config argument with nested key passed: '$1' = '$2'" );
-        my $argConfig = {};
-        my $compositeKey = $1;
-        my $value = $2;
-
-        my @keyParts = split /\./, $compositeKey;
+    my @keyParts = split /\./, $key;
         
-        # Check that no key parts are empty.
-        if( grep { $_ eq '' } @keyParts ) {
-          printLog( "CLI config arg has invalid key: '$compositeKey'. Skipping." );
-        }
-        
-        # The first part of the key must always be interpreted as a hash key, even if it is a number.
-        my $evalConfig = '$argConfig->{' . ( shift @keyParts ) . '}';
-        for my $part ( @keyParts ) {
-          # Is the part a non-negative integer?
-          if( $part =~ /^\d+$/ ) {
-            # Consider it an array index.
-            $evalConfig .= "[$part]";
-          }
-          else {
-            # We've got a hash key.
-            $evalConfig .= "{$part}";
-          }
-        }
-        $evalConfig .= " = '$value';";
-
-        printLog( "Eval config: [$evalConfig]" );
-
-        eval $evalConfig;
-
-        push( @configs, $argConfig );
-        next;
-      }
-
-      if( $arg eq '-c' ) {
-        $main::showConfigOnly = TRUE;
-        next;
-      }
+    # Check that no key parts are empty.
+    if( grep { $_ eq '' } @keyParts ) {
+      printLog( "CLI config arg has invalid key: '$key'. Skipping." );
     }
-    else {
-      # This is a file argument.
-      printLog("config file passed as arg: $arg" );
-      
-      my $absConfigFilePath = getConfigPath( $arg );
-      
-      if( -e $absConfigFilePath ) {
-        if( -r $absConfigFilePath ) {
-          push( @configs, from_json_file( $absConfigFilePath ) );
-        }
-        else {
-          carp "Unable to read config file '$absConfigFilePath'. Skipping.";
-          next;
-        }
+        
+    # The first part of the key must always be interpreted as a hash key, even if it is a number.
+    my $evalConfig = '$config->{' . ( shift @keyParts ) . '}';
+    for my $part ( @keyParts ) {
+      # Is the part a non-negative integer?
+      if( $part =~ /^\d+$/ ) {
+        # Consider it an array index.
+        $evalConfig .= "[$part]";
       }
       else {
-        carp "Config file '$absConfigFilePath' does not exist. Skipping.";
-        next;
+        # We've got a hash key.
+        $evalConfig .= "{$part}";
       }
     }
+    $evalConfig .= " = '$value';";
+
+    printLog( "Eval config: [$evalConfig]" );
+
+    eval $evalConfig;
+
+  }
+  else {
+    # Top-level key
+    $config->{$key} = $value;
   }
 
-  return ( @configs );
+  return $config;
+}
+
+sub getFileConfig {
+  my $filepath = shift;
+
+  printLog("Config file passed on command-line: $filepath" );
+
+  if( -e $filepath ) {
+    if( -r $filepath ) {
+      return from_json_file( $filepath );
+    }
+    else {
+      carp "Unable to read config file '$filepath'. Skipping.";
+      return {};
+    }
+  }
+  else {
+    carp "Config file '$filepath' does not exist. Skipping.";
+    return {};
+  }
+}
+
+sub getJsonStringConfig {
+  my $jsonString = shift;
+
+  return from_json_string( $jsonString );
+}
+
+sub getDefaultConfigs {
+  return
+    from_json_file( File::Spec->catfile( $Bin, $DEFAULT_CONFIG_FILE ) )
+  , from_json_file( File::Spec->catfile( Cwd::getcwd(), $DEFAULT_CONFIG_FILE ) );
 }
 
 sub getSourceFiles {
@@ -306,7 +271,8 @@ sub parseSourceFile {
 sub parseProdContent {
   my ( $file, $type, $config )  = @_;
 
-  my $includedArgsRef = $config->{ env }{ $config->{ buildEnv } }{ definedArgs };
+  my @definedArgs = @{ $config->{ env }{ $config->{ buildEnv } }{ definedArgs } || [] };
+
   my $outputDir = $config->{ importroot };
 
   my $content = '';
@@ -353,7 +319,7 @@ sub parseProdContent {
         }
 
         # We are not already ignoring input.  Check this #ifdef.
-        if( ! defined Utils::indexOf( $1, $includedArgsRef ) ) {
+        if( ! defined Utils::indexOf( $1, @definedArgs ) ) {
           $ignoreInput = TRUE;
           $ifdefCount++;
         }
@@ -972,21 +938,42 @@ sub cleanUpResources {
 
 sub run {
 
+  # A hashref to hold the config values passed by flag on the command-line.
+  my @configs = getDefaultConfigs();
+
+  my $showConfigOnly = FALSE;
+  my $showFilesOnly = FALSE;
+
+  my $optionsResult = GetOptions(
+    'config-only'    => sub { $showConfigOnly = TRUE; $showFilesOnly = FALSE; }
+  , 'files-only'     => sub { $showFilesOnly = TRUE; $showConfigOnly = FALSE; }
+  , 'define:s%'      => sub { my ( $option, $key, $value ) = @_; push @configs, getDefinedArgConfig( $key, $value ); }
+  , 'json-define:s%' => sub { my $jsonString = $_[0]; push @configs, getJsonStringConfig( $jsonString ); }
+  , '<>'             => sub { my $file = $_[0]; push @configs, getFileConfig( $file ); }
+    );
+
   logStart();
 
   # This is a composite of all the default and CLI-specified config files
-  my $config = normalizeConfigurationValues( extendNew( getConfigs( @_ ) ) );
+  my $config = normalizeConfigurationValues( extendNew( @configs ) );
 
-  if( $main::showConfigOnly ) {
+  if( $showConfigOnly ) {
     print Data::Dumper->new( [$config], ['config'] )->Indent(3)->Dump();
     exit 0;
   }
 
-  setUpResources( $config );
-
   #TODO: implement subs iteration - allow arguments for subs - default "current" directory.
 
   my ( $filesByTypeAndDir, $filesForSourceCommands ) = getSourceFiles( $config );
+
+  if( $showFilesOnly ) {
+    print Data::Dumper->new( [$filesByTypeAndDir, $filesForSourceCommands], ['filesByTypeAndDir', 'filesForSourceCommands'] )->Indent(3)->Dump();
+    exit 0;
+  }
+
+  # After this point, there may be changes to content on disk.
+
+  setUpResources( $config );
 
   makeFiles( $config, $filesByTypeAndDir );
 
