@@ -42,6 +42,7 @@ our @EXPORT = qw(
   extend
   extendNew
   from_json_file
+  from_json_string
   emptyDirOfType
   replaceVariables
 );
@@ -103,7 +104,6 @@ sub extendNew {
   return $base_hashref;
 }
 
-#sub openConfigObj {
 sub from_json_file {
   my $file = shift;
   my $json = "";
@@ -127,6 +127,17 @@ sub from_json_file {
   else {
     # The file doesn't exist or is not readable.
     # We'll return an empty hashref.
+    return {};
+  }
+}
+
+sub from_json_string {
+  my $json = shift;
+  
+  if( defined $json ) {
+    from_json $json;
+  }
+  else {
     return {};
   }
 }
