@@ -48,8 +48,15 @@ our @EXPORT = qw(
 
 # get index of item in array
 sub indexOf {
-  my ($item, $array_ref) = @_;
-  $array_ref->[$_] eq $item && return $_ for 0..$#$array_ref; 
+  my $item = shift;
+  my @array = @_;
+
+  for my $i ( 0..$#array ) {
+    if( $array[$i] eq $item ) {
+      return $i;
+    }
+  }
+
   return undef;
 }
 
