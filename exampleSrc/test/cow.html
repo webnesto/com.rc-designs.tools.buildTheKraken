@@ -1,2 +1,28 @@
+<div>Before top-level import</div>
 <!-- #build_import ../exampleSrc/imports/import.html -->
-<p>gots me some html</p>
+<div>After top-level import</div>
+
+
+<div>Before ifdefs</div>
+<!-- #ifdef foo -->
+<div>foo</div>
+
+  <!-- #ifdef bar -->
+  <div>bar</div>
+
+    <!-- #ifdef quux -->
+    <div>quux</div>
+    <!-- #endif -->
+
+  <!-- #endif -->
+
+  <!-- #ifdef baz -->
+  <div>baz</div>
+  <!-- #endif -->
+
+<!-- #endif -->
+
+<!-- #ifdef zug -->
+<div>zug</div>
+<!-- #endif -->
+<div>After ifdefs</div>

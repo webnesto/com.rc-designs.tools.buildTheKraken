@@ -1,28 +1,28 @@
 #!/usr/bin/perl -w
 
-#	***** BEGIN MIT LICENSE BLOCK *****
+#  ***** BEGIN MIT LICENSE BLOCK *****
 #
-#	Copyright (c) 2011 B. Ernesto Johnson
+#  Copyright (c) 2011 B. Ernesto Johnson
 #
-#	Permission is hereby granted, free of charge, to any person obtaining a copy
-#	of this software and associated documentation files (the "Software"), to deal
-#	in the Software without restriction, including without limitation the rights
-#	to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-#	copies of the Software, and to permit persons to whom the Software is
-#	furnished to do so, subject to the following conditions:
+#  Permission is hereby granted, free of charge, to any person obtaining a copy
+#  of this software and associated documentation files (the "Software"), to deal
+#  in the Software without restriction, including without limitation the rights
+#  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+#  copies of the Software, and to permit persons to whom the Software is
+#  furnished to do so, subject to the following conditions:
 #
-#	The above copyright notice and this permission notice shall be included in
-#	all copies or substantial portions of the Software.
+#  The above copyright notice and this permission notice shall be included in
+#  all copies or substantial portions of the Software.
 #
-#	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-#	IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-#	FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-#	AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-#	LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-#	OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-#	THE SOFTWARE.
+#  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+#  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+#  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+#  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+#  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+#  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+#  THE SOFTWARE.
 #
-#	***** END MIT LICENSE BLOCK *****
+#  ***** END MIT LICENSE BLOCK *****
 
 package BuildTheKraken;
 
@@ -30,6 +30,7 @@ package BuildTheKraken;
 use strict;
 use warnings;
 
+use Carp;
 use Cwd;
 use Data::Dumper;
 use File::Basename;
@@ -38,728 +39,943 @@ use File::Find;
 use File::Path;
 use File::Spec;
 use FindBin qw( $Bin );
+use Getopt::Long;
 use IO::File;
 use List::Util qw( first );
-use Utils qw( printLog extend extendNew from_json_file emptyDirOfType );
+use Utils qw( printLog extend extendNew from_json_file from_json_string emptyDirOfType replaceVariables );
+
+use constant TRUE  => 1;
+use constant FALSE => '';
 
 #Variables
 
-my $DEFAULT_CONFIG = "build.json";
-my $REPLACE = "-CONTENT-";           # Used in replacement of dev build strings.
-my $BUILD_DEV    = 'dev';
-my $BUILD_PROD   = 'prod';
-my $WARNING = 'GENERATED FILE - DO NOT EDIT';
-my $MIN = "min";
+my $DEFAULT_CONFIG_FILE  = 'kraken.json';
+my $BUILD_ENV_DEV       = 'dev';
+my $BUILD_ENV_PROD      = 'prod';
+my $BUILD_ENV_BOTH      = 'both';
+my $WARNING_MESSAGE      = 'GENERATED FILE - DO NOT EDIT';
+my $MIN_DIR              = 'min';
+my $SCRATCH_DIR          = "tmp";
+my @DIRECTORY_VALUE_KEYS = ( 'outputDir', 'sourceDir' );  # Their values will get turned into absolute paths.
 
+# Patterns
+
+my $IFDEF_PATTERN   = qr/#ifdef\s+(\w+)/;
+my $ENDIF_PATTERN   = qr/#endif/;
+my $IMPORT_PATTERN  = qr/#build_import\s+([^\s]+)/;
+my $REPLACE_PATTERN = qr/-CONTENT-/;
+my $TRIMMABLE_WHITESPACE = qr/^\s+|\s+$/;
 
 #Functions
 
 sub logStart {
-	printLog(
-		"++++++++++++++++"
-	,	"Build The Kraken!: "
-	.	POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
-	.	"\n"
-	);
+  printLog(
+    '++++++++++++++++'
+  , 'Build The Kraken!: '
+  . POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
+  . $/
+  );
 }
 
 sub logEnd {
-	my ( $build ) = @_;
-	printLog(
-		"The Kraken is Built!: "
-	.	POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
-	.	" type:$build"
-	,	"++++++++++++++++"
-	);
+  my ( $build ) = @_;
+  printLog(
+    "The Kraken is Built!: "
+  .  POSIX::strftime("%m/%d/%Y %H:%M:%S", localtime)
+  .  " type:$build"
+  ,  "++++++++++++++++"
+  );
 }
 
 sub printOrder ($) {
-#	my $val = $_[0];
-#	if( $val == 1 ) {
-#		printLog( "B should come first\n" );
-#		return;
-#	}
-#	if( $val == -1 ) {
-#		printLog( "A should come first\n" );
-#		return;
-#	}
-#	printLog( "Neither should come first, this is borken!\n" );
+#  my $val = $_[0];
+#  if( $val == 1 ) {
+#    printLog( "B should come first\n" );
+#    return;
+#  }
+#  if( $val == -1 ) {
+#    printLog( "A should come first\n" );
+#    return;
+#  }
+#  printLog( "Neither should come first, this is borken!\n" );
 }
 
-sub getConfig {
-	my $execPath = Cwd::getcwd();
-	my ( $path ) = @_;
-	my $ret;
+sub getDefinedArgConfig {
+  my ( $key, $value ) = @_;
 
-	if( File::Spec->file_name_is_absolute( $path ) ){
-		$ret = $path;
-	} else {
-		$ret = File::Spec->catfile( $execPath, $path );
-	}
+  printLog( "Key-value config passed on command line: '$key' = '$value'" );
 
-	return $ret;
+  my $config = {};
+
+  if( $key =~ /^[^.].*\..*[^.]$/ ) {
+    # Dotted notation
+
+    my @keyParts = split /\./, $key;
+        
+    # Check that no key parts are empty.
+    if( grep { $_ eq '' } @keyParts ) {
+      printLog( "CLI config arg has invalid key: '$key'. Skipping." );
+    }
+        
+    # The first part of the key must always be interpreted as a hash key, even if it is a number.
+    my $evalConfig = '$config->{' . ( shift @keyParts ) . '}';
+    for my $part ( @keyParts ) {
+      # Is the part a non-negative integer?
+      if( $part =~ /^\d+$/ ) {
+        # Consider it an array index.
+        $evalConfig .= "[$part]";
+      }
+      else {
+        # We've got a hash key.
+        $evalConfig .= "{$part}";
+      }
+    }
+    $evalConfig .= " = '$value';";
+
+    printLog( "Eval config: [$evalConfig]" );
+
+    eval $evalConfig;
+
+  }
+  else {
+    # Top-level key
+    $config->{$key} = $value;
+  }
+
+  return $config;
 }
 
-sub getConfigs {
-	my $execPath = Cwd::getcwd();
-	my $defaultConfig = from_json_file( File::Spec->catfile( $Bin, $DEFAULT_CONFIG ) );
-	my $execConfig = from_json_file( File::Spec->catfile( $execPath, $DEFAULT_CONFIG ) );
+sub getFileConfig {
+  my $filepath = shift;
 
-	my @configs = (
-		$defaultConfig
-	,	$execConfig
-	);
+  printLog( "Config file passed on command-line: $filepath" );
 
-	my $argObj = {};
-	foreach my $arg ( @_ ){
-		if( $arg eq "-dev" ){	# Arguments override any config files
-			$argObj->{ "build" } = "dev";
-#		} elsif( $arg eq "-foo" ){
-#			$argObj->{ "foo" } = "bar";
-		} else {
-			printLog("config file passed as arg: $arg" );
-			push( @configs, from_json_file( getConfig( $arg ) ) );
-		}
-	}
-
-	push( @configs, $argObj );
-
-	return ( @configs );
+  if( -e $filepath ) {
+    if( -r $filepath ) {
+      return from_json_file( $filepath );
+    }
+    else {
+      carp "Unable to read config file '$filepath'. Skipping.";
+      return {};
+    }
+  }
+  else {
+    carp "Config file '$filepath' does not exist. Skipping.";
+    return {};
+  }
 }
 
-sub getFilenamesByType {
-	my ( $location, $config, $filesForSourceCommands ) = @_;
-	my $documentable;
-	my $typeProps;
-	my $targetedSource;
-	my @filenames = ();
-	my $extFiles = {};
-	my $return = {};
-	my $ext;
-	my $numFiles;
-	my @ignores;
+sub getJsonStringConfig {
+  my $jsonString = shift;
 
-	for my $filetype ( @{ $config->{ types } } ){
-		$typeProps = $config->{ typeProps }->{ $filetype } or die "No properties for filetype: $filetype";
-		$ext = $typeProps->{ extension } or die "No extension for filetype: $filetype";
-		@ignores = ( @{ $config->{ ignores } }, @{ $typeProps->{ ignores } } );
-		$filesForSourceCommands->{ $ext } = [];
+  printLog( "JSON config passed on command line: $jsonString" );
 
-		printLog( "processing $ext" );
-		if( !defined( $return->{ $ext } ) ){
-			$return->{ $ext } = {};
-		}
-		$extFiles = $return->{ $ext };
+  return from_json_string( $jsonString );
+}
 
-		if( $typeProps->{folder} ){
-			$targetedSource = File::Spec->catdir( $location, $typeProps->{folder} );
-		} else {
-			$targetedSource = $location;
-		}
+sub getDefaultConfigs {
+  return
+    from_json_file( File::Spec->catfile( $Bin, $DEFAULT_CONFIG_FILE ) )
+  , from_json_file( File::Spec->catfile( Cwd::getcwd(), $DEFAULT_CONFIG_FILE ) );
+}
 
-		chdir $targetedSource;
-		@filenames = glob "*";
+sub getSourceFiles {
+# Expects 1 argument:
+#   $config: A configuration hash reference.
+#
+# Returns:
+#   $filesByTypeAndDir: A hashref keying the type's name to a hashref whose keys are
+#                       directories relative to the $config->{workDir} and values are an array of 
+#                       absolute paths to files in that directory with the type's extension.
+#   $filesForSourceCommands: A hashref with file-extension keys whose values are a reference 
+#                            to an array containing the paths to the same files returned in
+#                            the returned data, but with the path relative to the $targetedSrcDir.
 
-		for my $folder (@filenames) {
-			-d $folder or next;		# Only using folders.  Skipping files.
-			if( indexOfPatternArray( \@ignores, $folder ) == -1 ){
-				printLog( "	+ folder: $folder" );
-				if ( !defined( $extFiles->{ $folder } ) ) {
-					$extFiles->{ $folder } = ();
-				}
+  my ( $config ) = @_;
 
-				find(
-					sub {
-						my $file = $File::Find::name;
-						my $relFile;
-						if ( $file =~ /\.($ext)$/) {
-							push( @{ $extFiles->{ $folder } }, $file );
-							$relFile = File::Spec->abs2rel( $file, $targetedSource );
-							push( @{ $filesForSourceCommands->{ $ext } }, $relFile );
-							printLog( "		file: $_" );
-						}
-					}
-				, 	File::Spec->catfile( $targetedSource, $folder )
-				);
+  my $filesByTypeAndDir = {};
+        my $filesForSourceCommands = {};
 
-				if( !defined $extFiles->{ $folder } ){
-					delete $extFiles->{ $folder };
-				} else {
-					$numFiles = @{ $extFiles->{ $folder } };
-					printLog( "		TOTAL:$ext:$folder: $numFiles" );
-				}
+  for my $type ( @{ $config->{ types } } ){
+    my $typeProps = $config->{ typeProps }{ $type };
+    my $ext = $typeProps->{ extension } or croak "No extension for filetype: $type";
+    my @ignores = ( @{ $config->{ ignores } }, @{ $typeProps->{ ignores } } );
 
-			} else {
-				printLog( "	- ignore: $folder");
-			}
-		}
-	}
+    $filesForSourceCommands->{ $type } = [];
 
-	chdir $location; #get back to where we were
+    printLog( "Getting $type source files." );
+    defined $filesByTypeAndDir->{ $type } or $filesByTypeAndDir->{ $type } = {};
 
-	return $return, $filesForSourceCommands;
+    # If $typeProps->{folder} is defined, look in that subdirectory of the $config->{workDir}.
+    # Otherwise, look in the $config>{workDir}.
+    my $targetedSrcDir = ( defined $typeProps->{folder} ) ?
+        File::Spec->catdir( $config->{workDir}, $typeProps->{folder} ) :
+        $config->{workDir};
+
+    chdir $targetedSrcDir;
+
+    for my $dir ( glob '*' ) {
+      -d $dir or next;    # Only using folders.  Skipping files.
+      if( indexOfPatternArray( $dir, \@ignores ) == -1 ) {
+        # If we are not configured to ignore this directory...
+        printLog( "\t+ folder: $dir" );
+
+        # Make sure there is an array allocated for the extension and directory.
+        unless( defined $filesByTypeAndDir->{ $type }{ $dir } ) {
+          $filesByTypeAndDir->{ $type }{ $dir } = ();
+        }
+
+        find(
+          sub {
+            my $absFile = $File::Find::name;
+            if ( $absFile =~ /\.($ext)$/) {
+              push( @{ $filesByTypeAndDir->{ $type }{ $dir } }, $absFile );
+              my $relFile = File::Spec->abs2rel( $absFile, $targetedSrcDir );
+              push( @{ $filesForSourceCommands->{ $type } }, $relFile );
+              printLog( "\t\t$_" );
+            }
+          }
+        ,   File::Spec->catdir( $targetedSrcDir, $dir )
+        );
+
+        if( ! defined $filesByTypeAndDir->{ $type }{ $dir } ) {
+          # Remove keys for extension-directory combinations with no files.
+          delete $filesByTypeAndDir->{ $type }{ $dir };
+        } else {
+          my $numFiles = scalar @{ $filesByTypeAndDir->{ $type }{ $dir } };
+          my $plural = ( $numFiles == 1 ) ? '' : 's';
+          printLog( "\t\t$numFiles file$plural total" );
+        }
+
+      }
+      else {
+        printLog( "\t- ignore: $dir");
+      }
+    }
+  }
+
+  chdir $config->{workDir}; # Return from whence we came.
+
+  return $filesByTypeAndDir, $filesForSourceCommands;
+}
+
+sub parseSourceFile {
 }
 
 sub parseProdContent {
-	my ( $file, $argStates, $includedArgs, $location )  = @_;
-	my @argStates = @{ $argStates };
-	my @includedArgs = @{ $includedArgs };
-	my $importPath;
-	my $ret;
+  my ( $file, $type, $config )  = @_;
 
-	if( -e $file ){
-		my $fileIO = new IO::File( $file, "r" ) or die "could not open $file";
-		while ( my $line = $fileIO->getline() ) {
+  my @definedArgs = @{ $config->{ env }{ $config->{ buildEnv } }{ definedArgs } || [] };
 
-			if ( $line =~ /\#build_import\s*([^\s]*)/ ) {
-				$importPath = File::Spec->catfile( $location, $1 );
-				printLog( " prod - importing: $importPath \n\n" );
-				$ret.= parseProdContent( $importPath, \@argStates, \@includedArgs, $location );
-			} else {
+  my $outputDir = $config->{ sourceDir };
 
-				if(
-					( $line =~ /\#endif/ )
-				&&	( scalar( @argStates ) > 1 ) #ensure that there's an argState left to shift (protects against forgotten "endifs" left in files without openers)
-				){
-					shift( @argStates );
-					next;
-				}
-				if ( $line =~ /\#ifdef\s*(\w+)/ ) {
-					my $arg = $1;
-					if ( Utils::indexOf( $arg, \@includedArgs ) > -1 && ( $argStates[0] ) ) {
-						unshift( @argStates, 1 );
-					} else {
-						unshift( @argStates, 0 );
-					}
-				} #TODO: consider reversal of logic for ifndef directives.  What's their use in a JS build system?
-				$ret.= $line if ( $argStates[0] );
-			}
+  my $content = '';
 
-		}
-		undef $fileIO;
-	} else {
-		die "does not exist for parsing. $file"
-	}
-	return $ret;
+  if( -e $file ){
+    my $fh = new IO::File( $file, "r" );
+    unless( defined $fh ) {
+      croak "Could not open \"$file\" for reading: $!";
+    }
+
+    my $ignoreInput = FALSE;
+
+    # This is just for the current file.
+    my $ifdefCount = 0;
+
+    while ( <$fh> ) {
+      if( $ignoreInput ) {
+        # We are inside an #ifdef block whose arg is NOT defined.
+        # Ignore everything except the #endif.
+        next unless( /$ENDIF_PATTERN/ || /$IFDEF_PATTERN/ );
+
+      }
+
+      if( /$ENDIF_PATTERN/ ) {
+        if( $ignoreInput ) {
+            $ifdefCount--;
+        }
+        else {
+          if( $ifdefCount > 0 ) {
+            carp "File \"$file\" is has too many #endif lines.";
+          }
+        }
+        if( $ifdefCount == 0 ) {
+          $ignoreInput = FALSE;
+        }
+        next;
+      }
+
+      if( /$IFDEF_PATTERN/ ) {
+        if( $ignoreInput ) {
+          # Just increment the nesting counter.
+          $ifdefCount++;
+          next;
+        }
+
+        # We are not already ignoring input.  Check this #ifdef.
+        if( ! defined Utils::indexOf( $1, @definedArgs ) ) {
+          $ignoreInput = TRUE;
+          $ifdefCount++;
+        }
+
+        next;
+      }
+
+      if( /$IMPORT_PATTERN/ ) {
+        my $importPath = File::Spec->catfile( $outputDir, $1 );
+        printLog( "\tPROD - Found import in '$file': '$importPath'" );
+        my $importedContent .= parseProdContent( $importPath, $type, $config );
+
+        printLog( '=' x 32, $importedContent, '=' x 32 );
+
+        $content .= $importedContent;
+        next;
+      }
+      
+      # This is just a regular, not a directive, line.
+      $content .= $_;
+
+    }
+    undef $fh;
+
+    if( $ifdefCount > 0 ) {
+      my $lines = ( $ifdefCount > 1 ) ? 'lines' : 'line';
+      carp "File \"$file\" is missing $ifdefCount closing #endif $lines.";
+    }
+  }
+  else {
+    croak "Expected file does not exist for parsing: $file";
+  }
+  return $content;
 }
 
 sub parseDevContent {
-	my ( $file, $includeString, $sourceUrl, $location, $extension_out_dev ) = @_;
-	my $tmpStr;
-	my $importPath;
-	my $import;
-	my $recurse;
-	my $ret;
+  my ( $file, $type, $config ) = @_;
 
-	if( -e $file ){
-		my $fileIO = new IO::File( $file, "r" ) or die "could not open $file";
-		while ( my $line = $fileIO->getline() ) {
+  my $typeProps = $config->{ typeProps }{ $type };
 
-			if ( $line =~ /\#build_import\s*([^\s]*)/ ) {
-				$import = "$sourceUrl$1";
-				$import = replaceExtension( $import, $extension_out_dev );
-				$tmpStr = $includeString;
-				$tmpStr =~ s/$REPLACE/$import/;
-				$importPath = File::Spec->catfile( $location, $import );
-				printLog( "	dev - importing: $tmpStr" );
-				$recurse = parseDevContent( $importPath, $includeString, $sourceUrl, $extension_out_dev );
-				if( $recurse ){
-					$ret.= $recurse;
-				}
-				$ret.= $tmpStr."\n";
-			}
+  my $buildEnv = $config->{ buildEnv };
+  my $prependToPath = $config->{ env }{ $buildEnv }{ prependToPath };
 
-		}
-		undef $fileIO;
-	}
-	return $ret;
+  my $content = '';
+
+  if( -e $file ) {
+    my $fh = new IO::File( $file, 'r' );
+    unless( defined $fh ) {
+      croak "Could not open \"$file\" for reading: $!";
+    }
+
+    while( <$fh> ) {
+      if( /$IMPORT_PATTERN/ ) {
+        my $relImportPath = $1;
+
+        my $absImportPath = File::Spec->catfile( $config->{ sourceDir }, $relImportPath );
+
+        printLog( "\tdev - parsing file: $absImportPath" );
+
+        my $importedContent .= parseDevContent( $absImportPath, $type, $config );
+        
+        printLog( '=' x 32, $importedContent, '=' x 32 );
+
+        $content .= $importedContent;
+        
+        my $importString = $typeProps->{ env }{ $buildEnv }{ importString };
+        if( defined $importString ) {
+          $relImportPath = replaceExtension( $relImportPath, $typeProps->{ env }{ $buildEnv }{ extension_out } );
+
+          if( defined $prependToPath ) {
+            $relImportPath = File::Spec->catfile( $prependToPath, $relImportPath );
+          }
+
+          $importString =~ s/$REPLACE_PATTERN/$relImportPath/;
+
+          printLog( "\tdev - writing importString: $importString" );
+          
+          $content .= $importString . $/;
+        }
+      }
+    }
+
+    undef $fh;
+  }
+
+  return $content;
 }
 
-sub replaceExtension{
-	my ( $path, $ext ) = @_;
-	if( $ext ){
-		$path =~ s/(.*)\.[^\.]*$/$1.$ext/;
-	}
-	return $path;
+sub replaceExtension {
+  my ( $path, $ext ) = @_;
+  if( $ext ){
+    $path =~ s,[^.]+$,$ext,;
+  }
+  return $path;
 }
 
 
 sub getFolderToIndex {
-	my ( $folders, $index ) = @_;
-	my $return = join( "/", @{$folders}[0..( $index + 0 )] );
-	#printLog( "getFolderToIndex:\n @{$folders} \n $index" );
-	#printLog( "  return: $return \n" );
-	return $return;
+  my ( $folders, $index ) = @_;
+  return join( "/", @{$folders}[0..( $index + 0 )] );
 }
 
 sub indexOfPatternArray{
-	my ( $array, $target ) = @_;
-	my @array = @{ $array };
-	my $return = first {
-		if ( $array[$_] =~ /^=~/ ){
-			my $re = substr $array[$_], 2;
-			return $target =~ $re;
-		}
-		elsif ( $array[$_] =~ /^!~/ ){
-			my $re = substr $array[$_], 2;
-			return $target !~ $re;
-		}
-		else {
-			return $target eq $array[$_];
-		}
-	} 0 .. $#array;
+# Expects:
+#   $target: The scalar value we are looking for.
+#   $array_ref: A reference to an array in which we will search.
+#
+# Returns:
+#   $index: The index of the item in the array matched by the $target.
 
-	unless( defined $return ){
-		$return = -1;
-	}
-#	printLog( "returning $return for $target" );
-	return $return;
+  my ( $target, $array_ref ) = @_;
+  my $index = first {
+    if ( $array_ref->[$_] =~ /^=~/ ){
+      my $re = substr $array_ref->[$_], 2;
+      $target =~ $re;
+    }
+    elsif ( $array_ref->[$_] =~ /^!~/ ){
+      my $re = substr $array_ref->[$_], 2;
+      $target !~ $re;
+    }
+    else {
+      $target eq $array_ref->[$_];
+    }
+  } 0 .. $#$array_ref;
+
+  return ( defined $index ) ? $index : -1;
 }
 
 sub getBuildSorter {
-	my ( $firsts, $lasts ) = @_;
+  my ( $firsts, $lasts ) = @_;
 
-	return sub {
-		my $la = $a; # lc $a;
-		my $lb = $b; #lc $b;
+  return sub {
+    my $la = $a; # lc $a;
+    my $lb = $b; #lc $b;
 
-#		printLog( "\n$la\n$lb" );
+#    printLog( '', $la, $lb );
 
-		my @firsts = @{ $firsts };
-		my @lasts = @{ $lasts };
+    my @firsts = @{ $firsts };
+    my @lasts = @{ $lasts };
 
-		my @aDirs = split(/\\|\//, $la );
-		my @bDirs = split(/\\|\//, $lb );
+    my @aDirs = split(/\\|\//, $la );
+    my @bDirs = split(/\\|\//, $lb );
 
-		my $aFolder = join( "/", @aDirs[0..(@aDirs - 2)] );
-		my $bFolder = join( "/", @bDirs[0..(@bDirs - 2)] );
+    my $aFolder = join( "/", @aDirs[0..(@aDirs - 2)] );
+    my $bFolder = join( "/", @bDirs[0..(@bDirs - 2)] );
 
-#		printLog( "a folder and b folder: \n   $aFolder\n   $bFolder\n " );
+#    printLog( 'a folder and b folder: ', $aFolder, $bFolder );
 
-		my $aFirstIndex = -1;
-		my $bFirstIndex = -1;
-		my $aLastIndex = -1;
-		my $bLastIndex = -1;
+    my $aFirstIndex = -1;
+    my $bFirstIndex = -1;
+    my $aLastIndex = -1;
+    my $bLastIndex = -1;
 
-		if( @firsts > 0 ) {  # An array of "first" filenames/patterns has been provided... find the index of current sort files in array
-			$aFirstIndex = indexOfPatternArray( $firsts, $aDirs[ $#aDirs ] );
-			$bFirstIndex  = indexOfPatternArray( $firsts, $bDirs[ $#bDirs ] );
-		}
-		if( @lasts > 0 ) {	# An array of "last" filenames/patterns has been provided... find the index of current sort files in array
-			$aLastIndex = indexOfPatternArray( $lasts, $aDirs[ $#aDirs ] );
-			$bLastIndex = indexOfPatternArray( $lasts, $bDirs[ $#bDirs ] )
-		}
+    if( scalar @firsts > 0 ) { # An array of "first" filenames/patterns has been provided... find the index of current sort files in array
+      $aFirstIndex = indexOfPatternArray( $aDirs[ $#aDirs ], $firsts );
+      $bFirstIndex  = indexOfPatternArray( $bDirs[ $#bDirs ], $firsts );
+    }
+    if( scalar @lasts > 0 ) { # An array of "last" filenames/patterns has been provided... find the index of current sort files in array
+      $aLastIndex = indexOfPatternArray( $aDirs[ $#aDirs ], $lasts );
+      $bLastIndex = indexOfPatternArray( $bDirs[ $#bDirs ], $lasts )
+    }
 
-		my $aIsAFirst = ( $aFirstIndex > -1 ) ? 1 : 0;
-		my $bIsAFirst = ( $bFirstIndex > -1 ) ? 1 : 0;
-		my $aIsALast = ( $aLastIndex > -1 ) ? 1 : 0;
-		my $bIsALast = ( $bLastIndex > -1 ) ? 1 : 0;
+    my $aIsAFirst = ( $aFirstIndex > -1 );
+    my $bIsAFirst = ( $bFirstIndex > -1 );
+    my $aIsALast  = ( $aLastIndex > -1 );
+    my $bIsALast  = ( $bLastIndex > -1 );
 
-		if( $aIsAFirst or $bIsAFirst ){ # If both are marked for first and are in the same directory, use the  passed array file sorting rules
-			if(
-				( $aIsAFirst and $bIsAFirst )
-			and
-				(	$aFolder eq $bFolder )
-			) {
-#				printLog( "both are marked for first and are in the same directory, use the  passed array file sorting rules." );
-				printOrder( $aFirstIndex <=> $bFirstIndex );
-				return $aFirstIndex <=> $bFirstIndex;
-			}
-			# If one has control file and a shorter path than the other, it should go first
-			# If one has control file and a longer path than the other, it should go last
-			if(
-				$aIsAFirst
-				&&(
-					(
-						( @aDirs < @bDirs )
-						# and bDirs up 2 aDirs folder are identical
-						&&( $aFolder eq getFolderToIndex( \@bDirs, @aDirs-2 ))
-					)
-					||
-					( $aFolder eq $bFolder )
-				)
-			){
-				printOrder( -1 );
-				return -1
-			}
-			if(
-				$bIsAFirst
-				&&(
-					(
-						( @bDirs < @aDirs )
-						&&( $bFolder eq getFolderToIndex( \@aDirs, @bDirs-2 ))
-					)
-					||
-					( $aFolder eq $bFolder )
-				)
-			){
-				printOrder(1);
-				return 1;
-			}
-			#printLog( "a or b is a first, but no handling has been done: prob?\n\n." ); # This log is misleading, may happen even when there's no problem
-		}
+    if( $aIsAFirst or $bIsAFirst ){ # If both are marked for first and are in the same directory, use the  passed array file sorting rules
+      if(
+        ( $aIsAFirst and $bIsAFirst )
+      and
+        (  $aFolder eq $bFolder )
+      ) {
+#        printLog( "both are marked for first and are in the same directory, use the  passed array file sorting rules." );
+        printOrder( $aFirstIndex <=> $bFirstIndex );
+        return $aFirstIndex <=> $bFirstIndex;
+      }
+      # If one has control file and a shorter path than the other, it should go first
+      # If one has control file and a longer path than the other, it should go last
+      if(
+        $aIsAFirst
+        &&(
+          (
+            ( @aDirs < @bDirs )
+            # and bDirs up 2 aDirs folder are identical
+            &&( $aFolder eq getFolderToIndex( \@bDirs, @aDirs-2 ))
+          )
+          ||
+          ( $aFolder eq $bFolder )
+        )
+      ){
+        printOrder( -1 );
+        return -1
+      }
+      if(
+        $bIsAFirst
+        &&(
+          (
+            ( @bDirs < @aDirs )
+            &&( $bFolder eq getFolderToIndex( \@aDirs, @bDirs-2 ))
+          )
+          ||
+          ( $aFolder eq $bFolder )
+        )
+      ){
+        printOrder(1);
+        return 1;
+      }
+      #printLog( "a or b is a first, but no handling has been done: prob?\n\n." ); # This log is misleading, may happen even when there's no problem
+    }
 
-		if( $aIsALast or $bIsALast ){
-			# If both are marked for first and are in the same directory, use the  passed array file sorting rules
-			if(
-				( $aIsALast and $bIsALast )
-			and
-				(	$aFolder eq $bFolder )
-			) {
-				printOrder( $aLastIndex <=> $bLastIndex );
-				return $aLastIndex <=> $bLastIndex;
-			}
-			# If one has control file and a shorter path than the other, it should go last
-			# If one has control file and a longer path than the other, it should go first
-			if(
-				$bIsALast
-				&&(
-					(
-						( @bDirs < @aDirs )
-						&&( $bFolder eq getFolderToIndex( \@aDirs, @bDirs-2 ))
-					)
-					||
-					( $aFolder eq $bFolder )
-				)
-			) {
-				printOrder( -1 );
-				return -1
-			}
-			if(
-				$aIsALast
-				&&(
-					(
-						( @aDirs < @bDirs )
-						&&( $aFolder eq getFolderToIndex( \@bDirs, @aDirs-2 ))
-					)
-					||
-					( $aFolder eq $bFolder )
-				)
-			){
-				printOrder( 1 );
-				return 1;
-			}
-		}
+    if( $aIsALast or $bIsALast ){
+      # If both are marked for first and are in the same directory, use the  passed array file sorting rules
+      if(
+        ( $aIsALast and $bIsALast )
+      and
+        (  $aFolder eq $bFolder )
+      ) {
+        printOrder( $aLastIndex <=> $bLastIndex );
+        return $aLastIndex <=> $bLastIndex;
+      }
+      # If one has control file and a shorter path than the other, it should go last
+      # If one has control file and a longer path than the other, it should go first
+      if(
+        $bIsALast
+        &&(
+          (
+            ( @bDirs < @aDirs )
+            &&( $bFolder eq getFolderToIndex( \@aDirs, @bDirs-2 ))
+          )
+          ||
+          ( $aFolder eq $bFolder )
+        )
+      ) {
+        printOrder( -1 );
+        return -1
+      }
+      if(
+        $aIsALast
+        &&(
+          (
+            ( @aDirs < @bDirs )
+            &&( $aFolder eq getFolderToIndex( \@bDirs, @aDirs-2 ))
+          )
+          ||
+          ( $aFolder eq $bFolder )
+        )
+      ){
+        printOrder( 1 );
+        return 1;
+      }
+    }
 
-		# else just do a normal evaluation
-		my $ret = $la cmp $lb;
-		printOrder( $ret );
-		$la cmp $lb;
-	}
+    # else just do a normal evaluation
+    my $ret = $la cmp $lb;
+    printOrder( $ret );
+    $la cmp $lb;
+  }
 }
 
 sub makeFiles {
-	my ( $config, $files, $location ) = @_;
-	my $scratch = $config->{ folders }->{ scratch };
-	my $folders_build = $config->{ folders }->{ build };
-	my $root = $config->{ root };
-	my $importroot = $config->{ importroot };
-	my $build = $config->{ build };
-	my $sourceUrl = $config->{ dev }->{ url };
-	my $keepers = $config->{ prod }->{ keep };
-	my $type;
-	my $ext;
-	my $ext_out;
-	my $ext_build;
-	my $fileName;
-	my $file;
-	my $fromFile;
-	my $typeProps;
-	my $blockComment;
-	my $buildSort;
-	my $includeString;
-	my $extension_out_dev;
-	my $tmpFile;
-	my $tmpStr;
-	my $relPath;
-	my $outputPath;
-	my @argStates;
-	my @fromFiles;
+# Expects:
+#   $config: The configuration hash reference.
+#   $filesByTypeAndDir: A hashref keying the type's extension to a hashref whose keys are
+#                       directories relative to the $workDir and values are an array of 
+#                       absolute paths to files in that directory with the required extension.
+
+  my ( $config, $filesByTypeAndDir ) = @_;
+
+  my $buildEnv = $config->{ buildEnv };
+
+  for my $type ( keys %{$filesByTypeAndDir} ) {
+    printLog( "Making $type files." );
+
+    my $typeProps = $config->{ typeProps }{ $type };
+    my $ext = $typeProps->{ extension };
+    my $ext_out = $typeProps->{ extension_out };
+    my $ext_build = ( $typeProps->{ build } ) ? $typeProps->{ build } : $ext;
+    my $extension_out_for_env = $typeProps->{ env }{ $buildEnv }{ extension_out };
+    
+    my $blockComment = $typeProps->{ block_comment };
+    $blockComment =~ s/$REPLACE_PATTERN/$WARNING_MESSAGE/;
+    
+    my $outputPath = File::Spec->catdir( $config->{ outputDir }, $ext_build, $config->{ folders }{ build } );
+
+    # Nomenclature note: Each directory in the source-tree becomes a file in the output-tree.
+    # So we are iterating over keys which are directory names, and are used to determine the
+    # output file name.
+    for my $dir ( keys %{ $filesByTypeAndDir->{ $type } } ){
+      my $file = File::Spec->catfile( $config->{ folders }{ scratch }, "$dir.$ext_out" );
+
+      printLog( "\tCreating new file '$file' from contents of directory '$dir'." );
+
+      my $fh = new IO::File $file, 'w';
+      unless( defined $fh ) {
+        croak "Could not open file \"$file\": $!";
+      }
+
+      $fh->print( $blockComment .  $/ );
+      $fh->print( $typeProps->{ prepend } );
+
+      my $buildSorter = getBuildSorter( $typeProps->{ firsts }, $typeProps->{ lasts } );
+
+      my @sortedSourceFiles = sort $buildSorter @{ $filesByTypeAndDir->{ $type }{ $dir } };
+      
+      for my $fromFile ( @sortedSourceFiles ){
+        $fromFile = Cwd::realpath( $fromFile );
+
+        printLog( "\t$buildEnv - parsing top-level file: $fromFile" );
+        my $tmpFile = undef;
+        if ( $buildEnv eq $BUILD_ENV_PROD ) {
+          $tmpFile = parseProdContent( $fromFile, $type, $config );
+        }
+        elsif ( $buildEnv eq $BUILD_ENV_DEV ) {
+          $tmpFile = parseDevContent( $fromFile, $type, $config );
+        }
 
 
-	if( File::Spec->file_name_is_absolute( $root ) ){
-		$root = $root;
-	} else {
-		$root = File::Spec->catfile( $location, $root );
-		$root = Cwd::realpath( $root );
-	}
+        if( $tmpFile ) {
+          printLog( '=' x 32, $tmpFile, '=' x 32 );
+          printLog( "\tGot content from parse method. Storing in '$file'." );
+          $fh->print( $tmpFile );
+        }
 
-	$importroot = Cwd::realpath( $root . "/" . $importroot ); #TODO: why didn't catpath work here?
+        my $importString = $typeProps->{ env }{ $buildEnv }{ importString };
+        if( defined $importString ) {
 
-	foreach $type( keys %{ $files } ){
-		$typeProps = $config->{ typeProps }->{ $type };
-		$ext = $typeProps->{ extension };
-		$ext_out = $typeProps->{ extension_out } ? $typeProps->{ extension_out } : $ext;
-		$ext_build = ( $typeProps->{ build } ) ? $typeProps->{ build } : $ext;
-		$extension_out_dev = $typeProps->{ extension_out_dev };
-		$blockComment = $typeProps->{ block_comment };
-		$blockComment =~ s/$REPLACE/$WARNING/;
-		$includeString = $typeProps->{dev_include};
-		$outputPath = File::Spec->catpath( $root, $ext_build, $folders_build );
+          # Get the path to the source file, relative to the configured "outputDir" directory.
+          my $relPath = File::Spec->abs2rel( $fromFile, $config->{ outputDir } );
+          $relPath = replaceExtension( $relPath, $extension_out_for_env ); # If $extension_out_for_env is undefined, does nothing.
+          
+          # Prepend something to the path, if configured.
+          my $prependToPath = $config->{ env }{ $buildEnv }{ prependToPath };
+          if( defined $prependToPath ) {
+            $relPath = File::Spec->catfile( $prependToPath, $relPath );
+          }
 
-		foreach $fileName ( keys %{ $files->{ $type } } ){
-			$file = File::Spec->catfile( $scratch, "$fileName.$ext_out" );
+          # Set the relative path in the include string.
+          $importString =~ s/$REPLACE_PATTERN/$relPath/;
 
-			printLog( "making file: $file" );
-			open FILE, ">$file" or die "Could not open $file\n";
-			print FILE $blockComment."\n";
-			print FILE $typeProps->{ prepend };
+          printLog( "\tdev - writing top-level importString: $importString" );
 
-			@argStates = (1);
+          $fh->print( $importString . $/ );
+        }
+      }
+      
+      $fh->print( $typeProps->{ postpend } );
 
-			$buildSort = getBuildSorter( $typeProps->{ firsts }, $typeProps->{ lasts } );
+      undef $fh; # Auto-closes the filehandle.
+    }
 
-			@fromFiles = sort $buildSort @{ $files->{ $type }->{ $fileName } };
-			foreach $fromFile ( @fromFiles ){
-				$fromFile = Cwd::realpath( $fromFile );
-				printLog( "	adding $fromFile" );
-				if ( $build eq $BUILD_PROD ) {
-					$tmpFile = parseProdContent( $fromFile, \@argStates, $keepers, $importroot );
-					print FILE $tmpFile if $tmpFile;
-				} elsif ( $build eq $BUILD_DEV ) {
-					my $tmpStr;
-					my $arg;
-					$tmpStr = parseDevContent( $fromFile, $includeString, $sourceUrl, $importroot , $extension_out_dev );
-					if( $tmpStr ){
-						print FILE $tmpStr;
-					}
-
-					# generate relative path
-					$relPath = File::Spec->abs2rel( $fromFile, $root ); #$fromFile; #
-
-					#$relPath =~ s/\Q$location\U//;
-					#$relPath =~ s/\\/\//g;
-			#		printLog( "rel? $relPath" );
-					$relPath = "$sourceUrl$relPath";    #remains relative as long as $sourceUrl has not been set
-					$relPath = replaceExtension( $relPath, $extension_out_dev );
-					$tmpStr = $includeString;
-
-					$tmpStr =~ s/$REPLACE/$relPath/;
-					printLog( "	dev - including: $tmpStr" );
-					print FILE $tmpStr."\n";
-
-				}
-
-			}
-
-			print FILE $typeProps->{ postpend };
-			close FILE;
-		}
-
-
-	}
+  }
 }
 
 sub moveToTarget {
-	my ( $config, $files, $location ) = @_;
-	my $scratch = $config->{ folders }->{ scratch };
-	my $bin = $config->{ folders }->{ build };
-	my $build = $config->{ build };
-	my $root = $config->{ root };
-	my $doDeletes = $config->{ doDeletes };
-	my $minPath;
-	my $type;
-	my $typeProps;
-	my $buildFolder;
-	my $ext;
-	my $ext_out;
-	my $fileName;
-	my $file;
-	my $minFile;
-	my $finalFile;
-	my $compressable;
-	my @commands;
-	my $rawcommand;
-	my $command;
+  my ( $config, $filesByTypeAndDir ) = @_;
+  my $bin = $config->{ folders }{ build };
+  my $buildEnv = $config->{ buildEnv };
+  my $doDeletes = $config->{ doDeletes };
 
-	if( File::Spec->file_name_is_absolute( $root ) ){
-		$root = $root;
-	} else {
-		$root = File::Spec->catfile( $location, $root );
-		$root = Cwd::realpath( $root );
-	}
+  for my $type ( keys %{ $filesByTypeAndDir } ) {
+    printLog( "Moving $type files." );
+    my $typeProps = $config->{ typeProps }{ $type };
+    my $ext = $typeProps->{ extension };
+    my $ext_out = $typeProps->{ extension_out };
+    my $buildFolder = $typeProps->{ build };
 
+    my $perFileCommandsArrayRef = $typeProps->{ env }{ $buildEnv }{ commands }{ perFile };
+    my @perFileCommands = @{ $perFileCommandsArrayRef || [] };
 
-	$minPath = File::Spec->catdir( $scratch, $MIN );
-	-e $minPath or mkdir $minPath or printLog( "Cannot make minPath: $minPath: $!" );
+    # If $buildFolder is blank...
+    if( ! defined $buildFolder || $buildFolder eq '' ) {
+      # ...then use the default.
+      $buildFolder = File::Spec->catdir( $typeProps->{ extension }, $config->{ folders }{ build } );
+    }
 
-	foreach $type( keys %{ $files } ){
-		$typeProps = $config->{ typeProps }->{ $type };
-		$ext = $typeProps->{ extension };
-		$ext_out = $typeProps->{ extension_out } ? $typeProps->{ extension_out } : $ext;
-		$buildFolder = $typeProps->{ build };
-		if( $build eq $BUILD_PROD ){
-			@commands = ( $typeProps->{ production_commands } ) ? @{ $typeProps->{ production_commands } } : ();
-		} else {
-			@commands = ( $typeProps->{ development_commands } ) ? @{ $typeProps->{ development_commands } } : ();
-		}
+    # Prepend the outputDir to make an absolute path.
+    $buildFolder = File::Spec->catdir( $config->{ outputDir }, $buildFolder );
 
-		if( $buildFolder eq "" ){
-			$buildFolder = File::Spec->catdir( $root, $ext );
-			$buildFolder = File::Spec->catdir( $buildFolder, $bin );
-		} else {
-			$buildFolder = File::Spec->catdir( $root, $buildFolder );
-		}
+    # make_path ensures all the necessary parent directories are created.
+    -e $buildFolder or File::Path::make_path( $buildFolder ) or croak "Cannot make buildFolder \"$buildFolder\": $!";
 
-		$buildFolder = Cwd::realpath( $buildFolder );
+    if( $doDeletes ){
+      printLog( "\temptying $buildFolder of .$ext_out files" );
+      emptyDirOfType( $buildFolder, $ext_out );
+    }
 
-		-e $buildFolder or mkdir $buildFolder or printLog( "Cannot make buildFolder: $buildFolder" );
+    for my $dir ( keys %{ $filesByTypeAndDir->{ $type } } ){ #TODO: this iteration doesn't seem to be working
 
-		if( $doDeletes ){
-			printLog( "	emptying $buildFolder of $ext_out files" );
-			emptyDirOfType( $buildFolder, $ext_out );
-		}
+      my $file = File::Spec->catfile( $config->{ folders }{ scratch }, "$dir.$ext_out" );
+      my $processedFile = File::Spec->catfile( $config->{folders}{minimized}, "$dir.$ext_out" );
+      my $finalFile = File::Spec->catfile( $buildFolder, "$dir.$ext_out" );
 
-		foreach $fileName ( keys %{ $files->{ $type } } ){ #TODO: this iteration doesn't seem to be working
+      if( scalar @perFileCommands > 0 ) {
+        printLog( "\t$buildEnv - Running per-file commands on file: $file" );
+        for my $perFileCommand ( @perFileCommands ) {
+          printLog( "\t\tPer-file command template: $perFileCommand" );
+          my $replacementHashref = {
+            scriptsPath => $Bin
+          , infile      => $file
+          , outfile     => $processedFile
+          };
+          $perFileCommand = replaceVariables( $perFileCommand, $replacementHashref );
 
-			$file = File::Spec->catfile( $scratch, "$fileName.$ext_out" );
-			$minFile = File::Spec->catfile( $scratch, $MIN, "$fileName.$ext_out" );
-			if(
-				( $build eq $BUILD_PROD )
-			){
-				copy( $file, $minFile ) or printLog( "Could not copy $file to $minFile: $!" );
-#				printLog( "running production commands on file: $file" );
-				foreach $rawcommand ( @commands ){
-					$command = $rawcommand;
-					printLog( "rawcommand: $command" );
-					my $scriptPath = '{scriptsPath}';
-					my $infile = '{infile}';
-					my $outfile = '{outfile}';
-					$command =~ s/$scriptPath/$Bin/g;
-					$command =~ s/$infile/$minFile/g;
-					$command =~ s/$outfile/$minFile/g;
-					printLog( "trying $command" );
-					`$command`;
-				}
-			} else {
-				copy( $file, $minFile ) or printLog( "Could not copy $file to $minFile: $!" );
-			}
+          printLog( "\t\tExecuting: $perFileCommand" );
+          `$perFileCommand`;
+          if( $? ) {
+            # The command returned with a non-zero exit status.
+            printLog( "\t\tThe per-file command returned exit status '" . ($? >> 8) . "'. Not using its output." );
+            next;
+          }
 
-			$finalFile = File::Spec->catfile( $buildFolder, "$fileName.$ext_out" );
-			copy( $minFile, $finalFile ) or printLog( "Could not copy $minFile, to $finalFile: $!" );
+          # Copy so that the next iteration will start with the output of this iteration.
+          printLog( "Copying '$processedFile' over '$file'" );
+          copy( $processedFile, $file );
+          # Delete the processed file so the next iteration's command does not complain it already exists.
+          unlink( $processedFile );
+        }
+      }
+      else {
+        printLog( "\t\tNone found." );
+      }
 
-			printLog("	created $finalFile" );
-		}
-	}
+      unless( copy( $file, $finalFile ) ) {
+        printLog( "Could not copy $file, to $finalFile: $!" );
+        next;
+      }
+
+      printLog("\tcreated $finalFile" );
+    }
+  }
 }
 
-sub doSourceCommands {
-	printLog( "beginning source commands" );
-	my ( $config, $location, $filesForSourceCommands ) = @_;
-	my $root = $config->{ root };
-	my $typeProps;
-	my $doCommands;
-	my $build = $config->{ build } || $BUILD_PROD;
-	my @files;
-	my $ext;
-	my @source_commands;
-	my $command;
-	my $filelist;
+sub runPostProcessCommands {
+  my ( $config, $filesForSourceCommands ) = @_;
+  my $buildEnv = $config->{ buildEnv };
 
-	my $scriptPath = '{scriptsPath}';
-	my $filesVar = '{files}';
-	my $rootVar = '{root}';
+  for my $type ( keys %{ $filesForSourceCommands } ) {
+    printLog( "Running post-process commands for $type." );
+    my $typeProps = $config->{ typeProps }{ $type };
+    my $filelist = join( ' ', @{ $filesForSourceCommands->{ $type } } );
+    my @postProcessCommands = @{ $typeProps->{ env }{ $buildEnv }{ commands }{ postProcess } || [] };
 
+    if( scalar @postProcessCommands > 0 ) {
+      for my $command ( @postProcessCommands ){
+        my $replacementHashref = {
+          scriptsPath => $Bin
+        , files       => $filelist
+        , outputDir   => $config->{ outputDir }
+        };
+        $command = replaceVariables( $command, $replacementHashref );
 
-	if( File::Spec->file_name_is_absolute( $root ) ){
-		$root = $root;
-	} else {
-		$root = File::Spec->catfile( $location, $root );
-		$root = Cwd::realpath( $root );
-	}
-
-	for $ext ( keys %{ $filesForSourceCommands } ) {
-		$typeProps = $config->{ typeProps }->{ $ext };
-		@files = @{ $filesForSourceCommands->{ $ext } };
-		$filelist = "@files";
-		@source_commands = ( $typeProps->{ source_commands } ) ? @{ $typeProps->{ source_commands } } : ();
-		$doCommands = $typeProps->{ do_source_commands } || "";
-		if(
-			$doCommands eq $build
-		or	$doCommands eq "both"
-		){
-			$doCommands = 1;
-		} else {
-			$doCommands = 0;
-		}
-		if( $doCommands ){
-			foreach $command ( @source_commands ){
-
-				$command =~ s/$scriptPath/$Bin/g;
-				$command =~ s/$filesVar/$filelist/g;
-				$command =~ s/$rootVar/$root/g;
-				printLog( "	trying: $command" );
-				`$command`;
-			}
-		}
-	}
-
-	printLog( "ending source commands" );
+        printLog( "\ttrying: $command" );
+        `$command`;
+      }
+    }
+    else {
+      printLog( "\tNone found." );
+    }
+  }
 }
 
-sub doProdCommands {
-	printLog( "beginning production commands" );
-	my ( $config, $location ) = @_;
-	my $typeProps;
-	my $doCommands;
-	my $build = $config->{ build } || $BUILD_PROD;
-	my @commands;
-	my $command;
-	my $scriptPathVar = '{scriptsPath}';
-	my $buildPathVar = '{buildPath}';
+sub normalizeConfigurationValues {
+# Also validates.
+#
+# Expects:
+#   $config: The configuration hash reference.
+#   $workDir: The current working directory.
 
-	if( $build ne $BUILD_PROD ){
-		return 0;
-	}
+  printLog( 'Validating and normalizing the build configuration.' );
 
-	@commands = ( $config->{ prod }->{ commands } ) ? @{ $config->{ prod }->{ commands } } : ();
-	foreach $command ( @commands ){
-		$command =~ s/$scriptPathVar/$Bin/g;
-		$command =~ s/buildPathVar/$location/g;
-		printLog( "	trying: $command" );
-		`$command`;
-	}
+    my $config = shift;
+    $config->{ workDir } = Cwd::getcwd();
 
-	printLog( "ending production commands" );
+    # Check the validity of the build enviroment setting.  It must be one of the keys
+    # of the "env" hash at the top level of the config tree.  In the default configuration
+    # file, the values are "prod" and "dev".
+    my @validEnvironments = keys %{ $config->{ env } };
+    my $buildEnv = $config->{ buildEnv };
+    unless( grep { /$buildEnv/ } @validEnvironments ) {
+      croak "Build environment value '$buildEnv' not found in environment list: '" . join( "', '", @validEnvironments ) . "'";
+    }
+
+    # Check that there is a set of type properties for each enumerated type.
+    my @badTypes = ();
+    for( @{$config->{types}} ) {
+      if( ( ! defined $config->{typeProps}{$_} )
+          ||
+          ( ref( $config->{typeProps}{$_} ) ne 'HASH' )
+        ) {
+        push @badTypes, $_;
+      }
+    }
+    if( scalar @badTypes > 0 ) {
+      croak 'No properties configured for types: ' . join( ', ', @badTypes );
+    }
+
+    # Now check that the type properties hashref contains a valid 'extension' key.
+    for( @{$config->{types}} ) {
+      my $typeProps = $config->{typeProps}{$_};
+      if( ! defined $typeProps->{extension} ) {
+        push @badTypes, $_;
+        next;
+      }
+      $typeProps->{extension} =~ s,$TRIMMABLE_WHITESPACE,,g;
+      
+      # The 'a' flag restricts "\w" to [A-Za-z0-9_].
+      if( $typeProps->{extension} !~ m,^\w+$,a ) {
+        push @badTypes, $_;
+        next;
+      }
+
+      # If we are here, we have a valid extension for this type.  So we can normalize
+      # other type properties.
+      defined $typeProps->{extension_out} or $typeProps->{extension_out} = $typeProps->{extension};
+
+    }
+    if( scalar @badTypes > 0 ) {
+      croak 'Missing or invalid extensions configured for types: ' . join( ', ', @badTypes );
+    }
+
+    # Check that if we are not flattening imports, we have an import string for each type.
+    if( ! $config->{ env }{ $buildEnv }{ flattenImports } ) {
+      for( @{$config->{types}} ) {
+        my $typeProps = $config->{typeProps}{$_};
+        unless( defined $typeProps->{ env }{ $buildEnv }{ importString } ) {
+          push @badTypes, $_;
+        }
+      }
+      if( scalar @badTypes > 0 ) {
+        croak "Configuration for environment '$buildEnv' specifies NOT flattening imports, "
+          . 'but there is no importString defined for these types: ' . join( ', ', @badTypes );
+      }
+    }
+
+
+  if( File::Spec->file_name_is_absolute( $config->{ sourceDir } ) ) {
+    croak "Configuration value 'sourceDir' is an absolute path ('$config->{ sourceDir }'), but it should be relative to the path in the configuration value 'outputDir' ('$config->{ outputDir }').";
+  }
+
+    # Canonicalize paths.
+    for my $dirValueKey ( @DIRECTORY_VALUE_KEYS ) {
+        unless( File::Spec->file_name_is_absolute( $config->{$dirValueKey} ) ) {
+            $config->{$dirValueKey} = File::Spec->catdir( $config->{workDir}, $config->{$dirValueKey} )
+        }
+    }
+
+    # Ensure we have a valid scratch directory setting.
+    # This should be a path relative to the "workDir" directory for the run.  Default: 'tmp'
+    defined $config->{ folders }{ scratch } or $config->{ folders }{ scratch } = $SCRATCH_DIR;
+
+    # Now make the scratch path absolute by prepending the absolute working directory path..
+    $config->{ folders }{ scratch } = File::Spec->catdir( $config->{ workDir }, $config->{ folders }{ scratch } );
+
+    # And define a minimized-resources directory path.
+    $config->{ folders }{ minimized } = File::Spec->catdir( $config->{ folders }{ scratch }, $MIN_DIR );
+
+    # Iterate over the available environments.
+    for my $envKey ( keys %{ $config->{env} } ) {
+      my $envConfig = $config->{ env }{ $envKey } || {};
+      # Trim the prependToPath value.
+      if( defined $envConfig->{ prependToPath } ) {
+        $envConfig->{ prependToPath } =~ s,$TRIMMABLE_WHITESPACE,,g;
+        if( $envConfig->{ prependToPath } eq '' ) {
+          delete $envConfig->{ prependToPath };
+        }
+      }
+    }
+
+  printLog( "\tConfiguration is valid and has been normalized." );
+
+  return $config;
+}
+
+sub setUpResources {
+# Expects:
+#   $config: The configuration hash reference.
+
+    my $config = shift;
+
+    # Set up the scratch directory.
+    my $scratchDir = $config->{ folders }{ scratch };
+
+    unless( -e $scratchDir ) {
+        mkdir $scratchDir, 0777 or croak "Cannot create scratch directory \"$scratchDir\": $!";
+    }
+
+    -w $scratchDir or croak "The scratch directory is not writable: $scratchDir";
+
+    # And now its child directory, for minimized resources.
+    my $minDir = $config->{ folders }{ minimized };
+
+    unless( -e $minDir ) {
+        mkdir $minDir, 0777 or croak "Cannot create minimized resources directory \"$minDir\": $!";
+    }
+
+    -w $minDir or croak "The minimized resources directory is not writable: $minDir";
+
+}
+
+sub cleanUpResources {
+# Expects:
+#   $config: The configuration hash reference.
+
+    my $config = shift;
+
+    unless( $config->{ keepScratch } ) {
+        # Handles its own carping or croaking on errors.
+        File::Path::remove_tree( $config->{ folders }{ scratch } );
+    }
+
 }
 
 sub run {
 
-	logStart();
+  # A hashref to hold the config values passed by flag on the command-line.
+  my @configs = getDefaultConfigs();
 
-	my $config = extendNew( getConfigs( @_ ) );
-	my $build = $config->{ build } || $BUILD_PROD;
-	my $location = Cwd::getcwd();
-	my $scratch = $config->{ folders }->{ scratch };
-	my $minPath;
-	my $keepScratch = $config->{ keepScratch };
+  my $showConfigOnly = FALSE;
+  my $showFilesOnly = FALSE;
 
-	#TODO: implement subs iteration - allow arguments for subs - default "current" directory.
+  my $optionsResult = GetOptions(
+    'config-only'   => sub { $showConfigOnly = TRUE; $showFilesOnly = FALSE; }
+  , 'files-only'    => sub { $showFilesOnly = TRUE; $showConfigOnly = FALSE; }
+  , 'define:s%'     => sub { my ( undef, $key, $value ) = @_; push @configs, getDefinedArgConfig( $key, $value ); }
+  , 'json-define:s' => sub { my ( undef, $jsonString ) = @_; push @configs, getJsonStringConfig( $jsonString ); }
+  , '<>'            => sub { my $file = $_[0]; push @configs, getFileConfig( $file ); }
+    );
 
-	my ( $files, $filesForSourceCommands ) = getFilenamesByType( $location, $config, {} );
-	-e $scratch or mkdir $scratch, 0777 or printLog( "Cannot make scratchDirectory: $scratch $!" );
-	makeFiles( $config, $files, $location );
-	moveToTarget( $config, $files, $location );
+  logStart();
 
-#	printLog( "Currently: ". Cwd::getcwd(). " old: $location" );
-	if(
-		( defined $scratch )
-	&&	( !$keepScratch )
-	){
-		$scratch = File::Spec->catfile( $location, $scratch );
-		$minPath = File::Spec->catdir( $scratch, $MIN );
-		emptyDirOfType( $minPath, ".*" );
-		rmdir $minPath or printLog( "Cannot delete $minPath" );
-		emptyDirOfType( $scratch, ".*" );
-		rmdir $scratch or ( printLog( "Cannot delete $scratch" and my $err = 1 ) );
-		if( !defined( $err ) ){
-			printLog( "scratch directory deleted\n" );
-		}
-	}
+  # This is a composite of all the default and CLI-specified config files
+  my $config = normalizeConfigurationValues( extendNew( @configs ) );
 
-	doSourceCommands( $config, $location, $filesForSourceCommands );
+  if( $showConfigOnly ) {
+    printLog('','','','');
+    print Data::Dumper->new( [$config], ['config'] )->Indent(3)->Dump();
+    exit 0;
+  }
 
-	logEnd( $build );
+  #TODO: implement subs iteration - allow arguments for subs - default "current" directory.
+
+  my ( $filesByTypeAndDir, $filesForSourceCommands ) = getSourceFiles( $config );
+
+  if( $showFilesOnly ) {
+    print Data::Dumper->new( [$filesByTypeAndDir, $filesForSourceCommands], ['filesByTypeAndDir', 'filesForSourceCommands'] )->Indent(3)->Dump();
+    exit 0;
+  }
+
+  # After this point, there may be changes to content on disk.
+
+  setUpResources( $config );
+
+  makeFiles( $config, $filesByTypeAndDir );
+
+  moveToTarget( $config, $filesByTypeAndDir );
+
+  cleanUpResources( $config );
+
+  runPostProcessCommands( $config, $filesForSourceCommands );
+
+  logEnd( $config->{ buildEnv } );
 }
 
-return 1;
+1;

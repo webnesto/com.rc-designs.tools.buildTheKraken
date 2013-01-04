@@ -1,0 +1,19 @@
+{
+  "_" : ""
+, "outputDir": "../exampleOutput2"
+, "keepScratch": "true"
+, "ignores": [
+    "imports"
+  , "tmp"
+  ]
+, "typeProps" : {
+    "Javascript" : {
+      "firsts" : [
+        "jquery"
+      ]
+//  , "lasts" : [
+//      "=~^at_unset"
+//    ]
+    }
+  }
+}
