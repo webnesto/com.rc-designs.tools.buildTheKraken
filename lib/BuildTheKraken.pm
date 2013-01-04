@@ -56,7 +56,7 @@ my $BUILD_ENV_BOTH      = 'both';
 my $WARNING_MESSAGE      = 'GENERATED FILE - DO NOT EDIT';
 my $MIN_DIR              = 'min';
 my $SCRATCH_DIR          = "tmp";
-my @DIRECTORY_VALUE_KEYS = ( 'root', 'importroot' );  # Their values will get turned into absolute paths.
+my @DIRECTORY_VALUE_KEYS = ( 'outputDir', 'sourceDir' );  # Their values will get turned into absolute paths.
 
 # Patterns
 
@@ -267,7 +267,7 @@ sub parseProdContent {
 
   my @definedArgs = @{ $config->{ env }{ $config->{ buildEnv } }{ definedArgs } || [] };
 
-  my $outputDir = $config->{ importroot };
+  my $outputDir = $config->{ sourceDir };
 
   my $content = '';
 
@@ -369,7 +369,7 @@ sub parseDevContent {
       if( /$IMPORT_PATTERN/ ) {
         my $relImportPath = $1;
 
-        my $absImportPath = File::Spec->catfile( $config->{ importroot }, $relImportPath );
+        my $absImportPath = File::Spec->catfile( $config->{ sourceDir }, $relImportPath );
 
         printLog( "\tdev - parsing file: $absImportPath" );
 
@@ -597,7 +597,7 @@ sub makeFiles {
     my $blockComment = $typeProps->{ block_comment };
     $blockComment =~ s/$REPLACE_PATTERN/$WARNING_MESSAGE/;
     
-    my $outputPath = File::Spec->catdir( $config->{root}, $ext_build, $config->{ folders }{ build } );
+    my $outputPath = File::Spec->catdir( $config->{ outputDir }, $ext_build, $config->{ folders }{ build } );
 
     # Nomenclature note: Each directory in the source-tree becomes a file in the output-tree.
     # So we are iterating over keys which are directory names, and are used to determine the
@@ -641,8 +641,8 @@ sub makeFiles {
         my $importString = $typeProps->{ env }{ $buildEnv }{ importString };
         if( defined $importString ) {
 
-          # Get the path to the source file, relative to the configured "root" directory.
-          my $relPath = File::Spec->abs2rel( $fromFile, $config->{root} );
+          # Get the path to the source file, relative to the configured "outputDir" directory.
+          my $relPath = File::Spec->abs2rel( $fromFile, $config->{ outputDir } );
           $relPath = replaceExtension( $relPath, $extension_out_for_env ); # If $extension_out_for_env is undefined, does nothing.
           
           # Prepend something to the path, if configured.
@@ -672,7 +672,6 @@ sub moveToTarget {
   my ( $config, $filesByTypeAndDir ) = @_;
   my $bin = $config->{ folders }{ build };
   my $buildEnv = $config->{ buildEnv };
-  my $root = $config->{ root };
   my $doDeletes = $config->{ doDeletes };
 
   for my $type ( keys %{ $filesByTypeAndDir } ) {
@@ -691,8 +690,8 @@ sub moveToTarget {
       $buildFolder = File::Spec->catdir( $typeProps->{ extension }, $config->{ folders }{ build } );
     }
 
-    # Prepend the root directory to make an absolute path.
-    $buildFolder = File::Spec->catdir( $root, $buildFolder );
+    # Prepend the outputDir to make an absolute path.
+    $buildFolder = File::Spec->catdir( $config->{ outputDir }, $buildFolder );
 
     # make_path ensures all the necessary parent directories are created.
     -e $buildFolder or File::Path::make_path( $buildFolder ) or croak "Cannot make buildFolder \"$buildFolder\": $!";
@@ -750,7 +749,6 @@ sub moveToTarget {
 
 sub runPostProcessCommands {
   my ( $config, $filesForSourceCommands ) = @_;
-  my $root = $config->{ root };
   my $buildEnv = $config->{ buildEnv };
 
   for my $type ( keys %{ $filesForSourceCommands } ) {
@@ -764,7 +762,7 @@ sub runPostProcessCommands {
         my $replacementHashref = {
           scriptsPath => $Bin
         , files       => $filelist
-        , root        => $root
+        , outputDir   => $config->{ outputDir }
         };
         $command = replaceVariables( $command, $replacementHashref );
 
@@ -788,8 +786,7 @@ sub normalizeConfigurationValues {
   printLog( 'Validating and normalizing the build configuration.' );
 
     my $config = shift;
-    my $workDir = shift || Cwd::getcwd();
-    $config->{ workDir } = Cwd::abs_path( $workDir );
+    $config->{ workDir } = Cwd::getcwd();
 
     # Check the validity of the build enviroment setting.  It must be one of the keys
     # of the "env" hash at the top level of the config tree.  In the default configuration
@@ -853,27 +850,23 @@ sub normalizeConfigurationValues {
     }
 
 
-  if( File::Spec->file_name_is_absolute( $config->{ importroot } ) ) {
-    croak "Configuration value 'importroot' is an absolute path ('$config->{importroot}'), but it should be relative to the path in the configuration value 'root' ('$config->{root}').";
+  if( File::Spec->file_name_is_absolute( $config->{ sourceDir } ) ) {
+    croak "Configuration value 'sourceDir' is an absolute path ('$config->{ sourceDir }'), but it should be relative to the path in the configuration value 'outputDir' ('$config->{ outputDir }').";
   }
-
-    # $config->{importroot} is relative to $config->{root}.
-    # So cat them before canonicalizing it below.
-    $config->{importroot} = File::Spec->catdir( $config->{root}, $config->{importroot} );
 
     # Canonicalize paths.
     for my $dirValueKey ( @DIRECTORY_VALUE_KEYS ) {
         unless( File::Spec->file_name_is_absolute( $config->{$dirValueKey} ) ) {
-            $config->{$dirValueKey} = Cwd::abs_path( File::Spec->catdir( $config->{workDir}, $config->{$dirValueKey} ) )
+            $config->{$dirValueKey} = File::Spec->catdir( $config->{workDir}, $config->{$dirValueKey} )
         }
     }
 
     # Ensure we have a valid scratch directory setting.
-    # This should be a path relative to the "root" directory for the run.  Default: 'tmp'
+    # This should be a path relative to the "workDir" directory for the run.  Default: 'tmp'
     defined $config->{ folders }{ scratch } or $config->{ folders }{ scratch } = $SCRATCH_DIR;
 
-    # Now make the scratch path absolute.
-    $config->{ folders }{ scratch } = Cwd::abs_path( $config->{ folders }{ scratch } );
+    # Now make the scratch path absolute by prepending the absolute working directory path..
+    $config->{ folders }{ scratch } = File::Spec->catdir( $config->{ workDir }, $config->{ folders }{ scratch } );
 
     # And define a minimized-resources directory path.
     $config->{ folders }{ minimized } = File::Spec->catdir( $config->{ folders }{ scratch }, $MIN_DIR );

@@ -2,11 +2,11 @@
 // Use "/" for file paths.  If not, "\" must be escaped (NOTE: will work in Windows either way);
 // TODO: when documenting use - be sure to indicate that any array properties are completely overrwritten when specified in additional build files.
 {
-  "buildEnv": "prod"                     // "prod" build environment - only valid values are "prod" and "dev"
-, "root": ""                              // default's to working directory
-, "importroot": "."                       // relative to root
+  "buildEnv": "prod"                      // "prod" build environment - only valid values are "prod" and "dev"
+, "outputDir": ""                         // default's to working directory
+, "sourceDir": "."                        // relative to root
 // NOTE: "subs" not yet implemented
-//, "subs": [                                 // series of subfolders to parse as "src" - inherently added to global ignores.
+//, "subs": [                             // series of subfolders to parse as "src" - inherently added to global ignores.
 //    ""                                  // working directory
 //  ]
 , "folders": {                            // folders created by builder

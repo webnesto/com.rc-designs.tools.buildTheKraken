@@ -5,16 +5,17 @@
 
   <target name="[prod]">
     <exec executable="${perl}">
-      <arg line="${krakenDir}/build.pl" />
+      <arg line="${krakenDir}/kraken.pl" />
       <arg line="${user.name}.json" />
+      <arg line="-d buildEnv=prod" />
     </exec>
   </target>
 
   <target name="[dev]">
     <exec executable="${perl}">
-      <arg line="${krakenDir}/build.pl" />
+      <arg line="${krakenDir}/kraken.pl" />
       <arg line="${user.name}.json" />
-      <arg line="-dev" />
+      <arg line="-d buildEnv=dev" />
     </exec>
     <exec executable="perl">
       <arg line="${krakenDir}/css31flavors.pl" />

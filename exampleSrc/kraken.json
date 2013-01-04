@@ -1,6 +1,6 @@
 {
   "_" : ""
-, "root": "../exampleOutput"
+, "outputDir": "../exampleOutput2"
 , "keepScratch": "true"
 , "ignores": [
     "imports"
